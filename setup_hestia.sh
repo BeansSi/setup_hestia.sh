@@ -1,11 +1,13 @@
 #!/bin/bash
 
 # Script Version
-SCRIPT_VERSION="1.1.4 (Updated: $(date))"
+SCRIPT_VERSION="1.1.5 (Updated: $(date))"
 
 echo "Welcome to Hestia Setup Script - Version $SCRIPT_VERSION"
 
 # Variables
+USE_PUBLIC_IP=true # Set to false to use local IPs
+
 HESTIA_USER="beanssi"
 HESTIA_PASSWORD="minmis123"
 EMAIL="beanssiii@gmail.com"
@@ -13,9 +15,17 @@ DOMAIN="beanssi.dk"
 CLOUDFLARE_API_TOKEN="Y45MQapJ7oZ1j9pFf_HpoB7k-218-vZqSJEMKtD3"
 CLOUDFLARE_ZONE_ID="9de910e45e803b9d6012834bbc70223c"
 REVERSE_DOMAINS=("proxmox.beanssi.dk" "hestia.beanssi.dk" "beanssi.dk" "adguard.beanssi.dk")
-SERVER_IP="192.168.50.51"
-PROXMOX_IP="192.168.50.50"
-ADGUARD_IP="192.168.50.52"
+
+# Determine IPs based on public or local setting
+if [ "$USE_PUBLIC_IP" = true ]; then
+    SERVER_IP="62.66.145.234"
+    PROXMOX_IP="62.66.145.234"
+    ADGUARD_IP="62.66.145.234"
+else
+    SERVER_IP="192.168.50.51"
+    PROXMOX_IP="192.168.50.50"
+    ADGUARD_IP="192.168.50.52"
+fi
 
 # Log Setup Details
 LOGFILE=/var/log/setup_hestia.log
