@@ -192,6 +192,14 @@ EOL
 
 function add_domains_to_hestia {
     echo "Adding domains to Hestia Control Panel..."
+
+    # Ensure user exists in Hestia
+    if ! /usr/local/hestia/bin/v-list-user $HESTIA_USER &>/dev/null; then
+        echo "Hestia user $HESTIA_USER does not exist. Creating user..."
+        /usr/local/hestia/bin/v-add-user $HESTIA_USER $HESTIA_PASSWORD $EMAIL
+        echo "User $HESTIA_USER created successfully."
+    fi
+
     for SUBDOMAIN in "${REVERSE_DOMAINS[@]}"; do
         echo "Executing: /usr/local/hestia/bin/v-add-web-domain $HESTIA_USER $SUBDOMAIN"
         if /usr/local/hestia/bin/v-list-web-domain $HESTIA_USER $SUBDOMAIN &>/dev/null; then
