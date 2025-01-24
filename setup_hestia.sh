@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Script Version
-SCRIPT_VERSION="1.0.8 (Updated: $(date))"
+SCRIPT_VERSION="1.0.9 (Updated: $(date))"
 echo "Welcome to Hestia Setup Script - Version $SCRIPT_VERSION"
 
 # Variables
@@ -135,11 +135,11 @@ EOL
 }
 
 function install_hestia {
+    echo "Installing Hestia Control Panel..."
     if [ -d "/usr/local/hestia" ]; then
         echo "Hestia Control Panel is already installed. Skipping installation."
         return
     fi
-    echo "Installing Hestia Control Panel..."
     apt update
     wget https://raw.githubusercontent.com/hestiacp/hestiacp/release/install/hst-install.sh
     bash hst-install.sh --force --email $EMAIL --password $HESTIA_PASSWORD --hostname "hestia.$DOMAIN" --lang en -y --no-reboot
@@ -226,6 +226,25 @@ function check_dns_records {
     done
 }
 
+function fix_dns_records {
+    echo "Fixing DNS records for subdomains..."
+    for SUBDOMAIN in "${REVERSE_DOMAINS[@]}"; do
+        EXPECTED_IP="$SERVER_IP"
+        if [[ "$SUBDOMAIN" == "proxmox.beanssi.dk" ]]; then
+            EXPECTED_IP="$PROXMOX_IP"
+        elif [[ "$SUBDOMAIN" == "adguard.beanssi.dk" ]]; then
+            EXPECTED_IP="$ADGUARD_IP"
+        fi
+
+        echo "Updating DNS for $SUBDOMAIN to point to $EXPECTED_IP..."
+        curl -X PATCH "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records" \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data '{"type":"A","name":"'$SUBDOMAIN'","content":"'$EXPECTED_IP'","ttl":120,"proxied":true}'
+        echo "DNS for $SUBDOMAIN updated to $EXPECTED_IP."
+    done
+}
+
 function full_setup {
     echo "Starting full setup..."
     backup_configurations
@@ -236,6 +255,14 @@ function full_setup {
     setup_reverse_proxy
     check_services
     check_dns_records
+
+    # Fix DNS records if necessary
+    if [ -s $ERROR_LOG ]; then
+        echo "Fixing DNS issues detected during setup..."
+        fix_dns_records
+        echo "Retrying setup after fixing DNS records..."
+        setup_reverse_proxy
+    fi
 
     # Display errors if any
     if [ -s $ERROR_LOG ]; then
