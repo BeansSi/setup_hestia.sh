@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Script Version
-SCRIPT_VERSION="1.1.6 (Updated: $(date))"
+SCRIPT_VERSION="1.1.7 (Updated: $(date))"
 
 echo "Welcome to Hestia Setup Script - Version $SCRIPT_VERSION"
 
@@ -20,6 +20,7 @@ REVERSE_DOMAINS=("proxmox.beanssi.dk" "hestia.beanssi.dk" "beanssi.dk" "adguard.
 SERVER_IP="192.168.50.51"
 PROXMOX_IP="192.168.50.50"
 ADGUARD_IP="192.168.50.52"
+LOCAL_DNS_SERVER="$SERVER_IP" # Use AdGuard or local DNS server
 
 # Log Setup Details
 LOGFILE=/var/log/setup_hestia.log
@@ -247,7 +248,7 @@ function check_dns_records {
             EXPECTED_IP="$ADGUARD_IP"
         fi
 
-        DNS_IP=$(nslookup $SUBDOMAIN | grep -A1 "Name:" | tail -n1 | awk '{print $2}')
+        DNS_IP=$(dig @$LOCAL_DNS_SERVER +short $SUBDOMAIN | tail -n1)
         if [ "$DNS_IP" == "$EXPECTED_IP" ]; then
             success_message "DNS for $SUBDOMAIN is correctly configured ($DNS_IP)."
         else
