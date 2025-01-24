@@ -1,74 +1,109 @@
 #!/bin/bash
 
 log() {
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $1"
+    local level="$1"
+    local message="$2"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $level: $message"
 }
 
-check_and_fix_http() {
-    DOMAIN=$1
-    CONFIG_PATH="/etc/nginx/conf.d/$DOMAIN.conf"
+check_service_status() {
+    local service="$1"
+    log "INFO" "Kontrollerer status for $service..."
+    if ! systemctl is-active --quiet "$service"; then
+        log "ERROR" "$service er ikke aktiv. Forsøger at genstarte..."
+        systemctl restart "$service"
+        if systemctl is-active --quiet "$service"; then
+            log "SUCCESS" "$service genstartet korrekt."
+        else
+            log "CRITICAL" "Kunne ikke genstarte $service. Kontrollér manuelt."
+        fi
+    else
+        log "INFO" "$service kører korrekt."
+    fi
+}
 
-    # Midlertidig HTTP-konfiguration uden HTTPS
-    cat > "$CONFIG_PATH" <<EOF
+fix_port_conflict() {
+    local port="$1"
+    log "INFO" "Kontrollerer, om port $port allerede er i brug..."
+    if lsof -i :$port | grep LISTEN; then
+        log "ERROR" "Port $port er allerede i brug. Dræber processer..."
+        fuser -k $port/tcp
+        log "SUCCESS" "Port $port frigivet."
+    else
+        log "INFO" "Port $port er ledig."
+    fi
+}
+
+setup_nginx() {
+    log "INFO" "Nulstilling og opsætning af Nginx-konfigurationer..."
+    # Slet eksisterende filer
+    for domain in proxmox.beanssi.dk hestia.beanssi.dk beanssi.dk; do
+        conf_path="/etc/nginx/conf.d/$domain.conf"
+        if [ -f "$conf_path" ]; then
+            rm "$conf_path"
+            log "SUCCESS" "Fil slettet: $conf_path"
+        else
+            log "INFO" "Fil findes ikke: $conf_path"
+        fi
+    done
+
+    # Opret konfigurationsfiler
+    cat <<EOF > /etc/nginx/conf.d/proxmox.beanssi.dk.conf
 server {
     listen 80;
-    server_name $DOMAIN;
-    root /var/www/letsencrypt/;
+    server_name proxmox.beanssi.dk;
+
     location /.well-known/acme-challenge/ {
-        allow all;
-        autoindex on;
+        root /var/www/letsencrypt;
     }
 }
 EOF
 
-    log "✔ Midlertidig HTTP-konfiguration tilføjet for $DOMAIN."
+    log "SUCCESS" "Nginx-konfigurationsfiler oprettet."
 
-    # Genindlæs Nginx og test
-    nginx -t > /dev/null 2>&1
-    if [ $? -eq 0 ]; then
-        systemctl reload nginx
-        log "✔ Nginx genindlæst med midlertidig HTTP-konfiguration for $DOMAIN."
+    # Genindlæs Nginx
+    log "INFO" "Genindlæser Nginx..."
+    if nginx -t && systemctl reload nginx; then
+        log "SUCCESS" "Nginx genindlæst korrekt."
     else
-        log "❌ Nginx-konfigurationsfejl for $DOMAIN. Kontrollér manuelt."
-        exit 1
+        log "CRITICAL" "Fejl under genindlæsning af Nginx. Kontrollér konfigurationerne."
     fi
 }
 
-test_url() {
-    URL=$1
-    EXPECTED_OUTPUT=$2
-    DOMAIN=$(echo $URL | awk -F/ '{print $3}')
-    RESPONSE=$(curl -s "$URL")
-    if [ "$RESPONSE" == "$EXPECTED_OUTPUT" ]; then
-        log "✔ URL-test bestået: $URL"
-    else
-        log "❌ URL-test fejlede: $URL. Forventet '$EXPECTED_OUTPUT', men fik '$RESPONSE'."
-        log "➡ Retter fejl for $DOMAIN..."
-        check_and_fix_http "$DOMAIN"
-        # Test igen efter rettelse
-        RESPONSE=$(curl -s "$URL")
-        if [ "$RESPONSE" == "$EXPECTED_OUTPUT" ]; then
-            log "✔ URL-test bestået efter rettelse: $URL"
+run_certbot() {
+    log "INFO" "Forsøger at generere Let's Encrypt-certifikater..."
+    for domain in proxmox.beanssi.dk hestia.beanssi.dk beanssi.dk; do
+        if certbot certonly --nginx -d "$domain" --non-interactive --agree-tos --email admin@beanssi.dk; then
+            log "SUCCESS" "Certifikat genereret for $domain."
         else
-            log "❌ URL-test fejlede stadig: $URL. Kontrollér manuelt."
+            log "ERROR" "Kunne ikke generere certifikat for $domain. Kontrollér fejlene."
         fi
-    fi
+    done
 }
 
-# Start
-log "Starter nulstilling og opsætning af Nginx-konfigurationer..."
+test_urls() {
+    log "INFO" "Tester URL'er for Let's Encrypt validering..."
+    for domain in proxmox.beanssi.dk hestia.beanssi.dk beanssi.dk; do
+        url="http://$domain/.well-known/acme-challenge/testfile"
+        response=$(curl -s -o /dev/null -w "%{http_code}" "$url")
+        if [ "$response" -eq 200 ]; then
+            log "SUCCESS" "URL fungerer korrekt: $url"
+        else
+            log "ERROR" "URL-test fejlede for $url. HTTP-kode: $response"
+        fi
+    done
+}
 
-# Domæner
-DOMAINS=("proxmox.beanssi.dk" "hestia.beanssi.dk" "beanssi.dk")
-EXPECTED_TEST_OUTPUT="Test"
+main() {
+    log "INFO" "Starter opsætning..."
+    check_service_status "nginx"
+    check_service_status "hestia"
+    fix_port_conflict 8080
+    fix_port_conflict 8083
+    setup_nginx
+    test_urls
+    run_certbot
+    log "INFO" "Opsætningen er fuldført!"
+}
 
-# Tester og retter URL'er
-log "Tester test-URL'er..."
-for DOMAIN in "${DOMAINS[@]}"; do
-    TEST_URL="http://$DOMAIN/.well-known/acme-challenge/test_$DOMAIN"
-    test_url "$TEST_URL" "$EXPECTED_TEST_OUTPUT"
-done
-
-# Slutbesked
-log "✅ Opsætningen er fuldført! Test dine domæner igen, og prøv Let's Encrypt-certifikater."
-exit 0
+main
