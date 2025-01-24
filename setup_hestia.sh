@@ -20,8 +20,9 @@ function display_menu {
     echo "2) Install Fail2Ban"
     echo "3) Configure SSH key"
     echo "4) Full setup"
-    echo "5) Exit"
-    read -p "Enter your choice [1-5]: " CHOICE
+    echo "5) Check services"
+    echo "6) Exit"
+    read -p "Enter your choice [1-6]: " CHOICE
     case "$CHOICE" in
         1)
             backup_configurations
@@ -36,6 +37,9 @@ function display_menu {
             full_setup
             ;;
         5)
+            check_services
+            ;;
+        6)
             echo "Exiting script."
             exit 0
             ;;
@@ -66,18 +70,39 @@ function install_fail2ban {
 
 function configure_ssh_key {
     echo "Configuring SSH key authentication for user $HESTIA_USER..."
-    if id "$HESTIA_USER" &>/dev/null; then
-        USER_HOME="/home/$HESTIA_USER"
-        mkdir -p $USER_HOME/.ssh
-        ssh-keygen -t rsa -b 4096 -f $USER_HOME/.ssh/id_rsa -q -N ""
-        cat $USER_HOME/.ssh/id_rsa.pub >> $USER_HOME/.ssh/authorized_keys
-        chmod 700 $USER_HOME/.ssh
-        chmod 600 $USER_HOME/.ssh/authorized_keys
-        chown -R $HESTIA_USER:$HESTIA_USER $USER_HOME/.ssh
-        echo "SSH key authentication configured. Private key is located at $USER_HOME/.ssh/id_rsa."
-    else
-        echo "Error: User $HESTIA_USER does not exist. Skipping SSH key configuration."
+    if ! id "$HESTIA_USER" &>/dev/null; then
+        echo "User $HESTIA_USER does not exist. Creating user..."
+        useradd -m -s /bin/bash $HESTIA_USER
+        echo "$HESTIA_USER:$HESTIA_PASSWORD" | chpasswd
+        echo "User $HESTIA_USER created."
     fi
+
+    USER_HOME="/home/$HESTIA_USER"
+    mkdir -p $USER_HOME/.ssh
+    ssh-keygen -t rsa -b 4096 -f $USER_HOME/.ssh/id_rsa -q -N ""
+    cat $USER_HOME/.ssh/id_rsa.pub >> $USER_HOME/.ssh/authorized_keys
+    chmod 700 $USER_HOME/.ssh
+    chmod 600 $USER_HOME/.ssh/authorized_keys
+    chown -R $HESTIA_USER:$HESTIA_USER $USER_HOME/.ssh
+    echo "SSH key authentication configured. Private key is located at $USER_HOME/.ssh/id_rsa."
+}
+
+function generate_sftp_config {
+    echo "Generating SFTP configuration for VS Code..."
+    SFTP_CONFIG_FILE="/root/sftp-config-vscode.json"
+    cat > $SFTP_CONFIG_FILE <<EOL
+{
+    "name": "SFTP Connection",
+    "host": "$(curl -s ifconfig.me)",
+    "protocol": "sftp",
+    "port": 22,
+    "username": "$HESTIA_USER",
+    "privateKeyPath": "/home/$HESTIA_USER/.ssh/id_rsa",
+    "remotePath": "/home/$HESTIA_USER/",
+    "uploadOnSave": true
+}
+EOL
+    echo "SFTP configuration for VS Code has been generated at $SFTP_CONFIG_FILE."
 }
 
 function check_hestia_installation {
@@ -133,7 +158,11 @@ EOL
         cat > "/etc/nginx/sites-available/$SUBDOMAIN" <<EOL
 server {
     listen 80;
+    listen 443 ssl;
     server_name $SUBDOMAIN;
+
+    ssl_certificate /etc/letsencrypt/live/$SUBDOMAIN/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/$SUBDOMAIN/privkey.pem;
 
     location / {
         proxy_pass $PROXY_PASS;
@@ -145,12 +174,30 @@ server {
 }
 EOL
         ln -sf "/etc/nginx/sites-available/$SUBDOMAIN" "/etc/nginx/sites-enabled/"
-        certbot --nginx -d $SUBDOMAIN --non-interactive --agree-tos -m $EMAIL || {
+        certbot --nginx --redirect -d $SUBDOMAIN --non-interactive --agree-tos -m $EMAIL || {
             echo "Error: Certificate for $SUBDOMAIN was not issued. Check Certbot logs for details.";
             continue;
         }
     done
     nginx -t && systemctl reload nginx
+}
+
+function check_services {
+    echo "Checking critical services..."
+    SERVICES=("fail2ban" "nginx" "vsftpd" "hestia")
+    for SERVICE in "${SERVICES[@]}"; do
+        if systemctl is-active --quiet $SERVICE; then
+            echo "Service $SERVICE is running."
+        else
+            echo "Service $SERVICE is NOT running. Attempting to start..."
+            systemctl start $SERVICE
+            if systemctl is-active --quiet $SERVICE; then
+                echo "Service $SERVICE started successfully."
+            else
+                echo "Failed to start service $SERVICE. Please check manually."
+            fi
+        fi
+    done
 }
 
 function full_setup {
@@ -159,8 +206,10 @@ function full_setup {
     install_fail2ban
     configure_certbot_plugin
     configure_ssh_key
+    generate_sftp_config
     install_hestia
     setup_reverse_proxy
+    check_services
 
     echo "Full setup completed."
 }
