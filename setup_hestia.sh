@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# Script Version
+SCRIPT_VERSION="1.0.2 (Updated: $(date))"
+echo "Welcome to Hestia Setup Script - Version $SCRIPT_VERSION"
+
 # Variables
 HESTIA_USER="beanssi"
 HESTIA_PASSWORD="minmis123"
@@ -8,7 +12,9 @@ DOMAIN="beanssi.dk"
 CLOUDFLARE_API_TOKEN="Y45MQapJ7oZ1j9pFf_HpoB7k-218-vZqSJEMKtD3"
 CLOUDFLARE_ZONE_ID="9de910e45e803b9d6012834bbc70223c"
 REVERSE_DOMAINS=("proxmox.beanssi.dk" "hestia.beanssi.dk" "beanssi.dk" "adguard.beanssi.dk")
-SERVER_IP="62.66.145.234"
+SERVER_IP="192.168.50.51"
+PROXMOX_IP="192.168.50.50"
+ADGUARD_IP="192.168.50.52"
 
 # Log Setup Details
 LOGFILE=/var/log/setup_hestia.log
