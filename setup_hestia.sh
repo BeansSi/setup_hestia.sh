@@ -190,11 +190,11 @@ EOL
 function add_domains_to_hestia {
     echo "Adding domains to Hestia Control Panel..."
     for SUBDOMAIN in "${REVERSE_DOMAINS[@]}"; do
-        if v-list-web-domain $HESTIA_USER $SUBDOMAIN &>/dev/null; then
+        if /usr/local/hestia/bin/v-list-web-domain $HESTIA_USER $SUBDOMAIN &>/dev/null; then
             echo "$SUBDOMAIN already exists in Hestia. Skipping."
         else
-            v-add-web-domain $HESTIA_USER $SUBDOMAIN
-            v-add-letsencrypt-domain $HESTIA_USER $SUBDOMAIN
+            /usr/local/hestia/bin/v-add-web-domain $HESTIA_USER $SUBDOMAIN
+            /usr/local/hestia/bin/v-add-letsencrypt-domain $HESTIA_USER $SUBDOMAIN
             echo "$SUBDOMAIN has been added to Hestia with SSL."
         fi
     done
