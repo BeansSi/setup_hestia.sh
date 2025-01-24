@@ -10,16 +10,22 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $level: $message" >> "$log_file"
 }
 
-# Funktion til fejlsøgning og rettelse af hestia.service
-fix_hestia_service() {
-    log "INFO" "Starter fejlsøgning og rettelse for hestia.service..."
+# Funktion til fejlsøgning og rettelse af Nginx
+fix_nginx_service() {
+    log "INFO" "Starter fejlsøgning og rettelse for nginx.service..."
 
-    # Tjek systemd-log for detaljer
-    log "INFO" "Indsamler de sidste 50 linjer fra systemloggen for hestia.service."
-    journalctl -u hestia.service -n 50 >> "$log_file"
+    # Tjekker Nginx-konfiguration
+    log "INFO" "Validerer Nginx-konfiguration..."
+    if nginx -t > /dev/null 2>&1; then
+        log "INFO" "Nginx-konfigurationen er gyldig."
+    else
+        log "ERROR" "Nginx-konfigurationen er ugyldig. Her er detaljer:"
+        nginx -t 2>&1 | tee -a "$log_file"
+        exit 1
+    fi
 
-    # Tjekker, om Hestias nødvendige porte er blokeret
-    for port in 8083 8084; do
+    # Tjekker efter brugte porte
+    for port in 80 443; do
         log "INFO" "Tjekker, om port $port er i brug..."
         if lsof -i :"$port" > /dev/null; then
             log "WARNING" "Port $port er i brug. Stopper processer, der bruger porten..."
@@ -30,27 +36,14 @@ fix_hestia_service() {
         fi
     done
 
-    # Tjekker Hestia-konfigurationsfiler
-    if [[ -f "/usr/local/hestia/nginx/conf/nginx.conf" ]]; then
-        log "INFO" "Kontrollerer Hestia Nginx-konfiguration..."
-        if nginx -t -c /usr/local/hestia/nginx/conf/nginx.conf; then
-            log "INFO" "Hestia Nginx-konfigurationen er gyldig."
-        else
-            log "ERROR" "Hestia Nginx-konfigurationen er ugyldig. Kontrollér manuelt."
-            nginx -t -c /usr/local/hestia/nginx/conf/nginx.conf >> "$log_file"
-        fi
+    # Genstarter Nginx
+    log "INFO" "Forsøger at genstarte nginx.service..."
+    systemctl restart nginx
+    if systemctl is-active --quiet nginx; then
+        log "SUCCESS" "nginx.service genstartet korrekt."
     else
-        log "ERROR" "Hestia Nginx-konfigurationsfil mangler!"
-    fi
-
-    # Prøver at genstarte Hestia-tjenesten
-    log "INFO" "Forsøger at genstarte hestia.service..."
-    systemctl restart hestia
-    if systemctl is-active --quiet hestia; then
-        log "SUCCESS" "hestia.service genstartet korrekt."
-    else
-        log "CRITICAL" "Kunne stadig ikke starte hestia.service. Kontrollér følgende log for detaljer:"
-        journalctl -u hestia.service -n 50 | tee -a "$log_file"
+        log "CRITICAL" "Kunne ikke genstarte nginx.service. Kontrollér følgende log for detaljer:"
+        journalctl -u nginx.service -n 50 | tee -a "$log_file"
         exit 1
     fi
 }
@@ -66,6 +59,7 @@ check_service() {
         systemctl restart "$service"
         if ! systemctl is-active --quiet "$service"; then
             log "CRITICAL" "Kunne ikke genstarte $service. Starter fejlsøgning..."
+            [[ "$service" == "nginx" ]] && fix_nginx_service
             [[ "$service" == "hestia" ]] && fix_hestia_service
             exit 1
         else
