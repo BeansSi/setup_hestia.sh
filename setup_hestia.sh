@@ -8,6 +8,7 @@ DOMAIN="beanssi.dk"
 CLOUDFLARE_API_TOKEN="Y45MQapJ7oZ1j9pFf_HpoB7k-218-vZqSJEMKtD3"
 CLOUDFLARE_ZONE_ID="9de910e45e803b9d6012834bbc70223c"
 REVERSE_DOMAINS=("proxmox.beanssi.dk" "hestia.beanssi.dk" "beanssi.dk" "adguard.beanssi.dk")
+SERVER_IP="62.66.145.234"
 
 # Log Setup Details
 LOGFILE=/var/log/setup_hestia.log
@@ -21,8 +22,9 @@ function display_menu {
     echo "3) Configure SSH key"
     echo "4) Full setup"
     echo "5) Check services"
-    echo "6) Exit"
-    read -p "Enter your choice [1-6]: " CHOICE
+    echo "6) Check DNS records"
+    echo "7) Exit"
+    read -p "Enter your choice [1-7]: " CHOICE
     case "$CHOICE" in
         1)
             backup_configurations
@@ -40,6 +42,9 @@ function display_menu {
             check_services
             ;;
         6)
+            check_dns_records
+            ;;
+        7)
             echo "Exiting script."
             exit 0
             ;;
@@ -200,6 +205,18 @@ function check_services {
     done
 }
 
+function check_dns_records {
+    echo "Checking DNS records for subdomains..."
+    for SUBDOMAIN in "${REVERSE_DOMAINS[@]}"; do
+        DNS_IP=$(nslookup $SUBDOMAIN | grep -A1 "Name:" | tail -n1 | awk '{print $2}')
+        if [ "$DNS_IP" == "$SERVER_IP" ]; then
+            echo "DNS for $SUBDOMAIN is correctly configured ($DNS_IP)."
+        else
+            echo "Warning: DNS for $SUBDOMAIN is misconfigured. Expected $SERVER_IP but found $DNS_IP."
+        fi
+    done
+}
+
 function full_setup {
     echo "Starting full setup..."
     backup_configurations
@@ -210,6 +227,7 @@ function full_setup {
     install_hestia
     setup_reverse_proxy
     check_services
+    check_dns_records
 
     echo "Full setup completed."
 }
