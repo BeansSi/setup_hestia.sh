@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Script Version
-SCRIPT_VERSION="1.1.1 (Updated: $(date))"
+SCRIPT_VERSION="1.1.2 (Updated: $(date))"
 
 echo "Welcome to Hestia Setup Script - Version $SCRIPT_VERSION"
 
@@ -163,12 +163,79 @@ function configure_ssh_key {
 
     USER_HOME="/home/$HESTIA_USER"
     mkdir -p $USER_HOME/.ssh
-    ssh-keygen -t rsa -b 4096 -f $USER_HOME/.ssh/id_rsa -q -N ""
+    yes | ssh-keygen -t rsa -b 4096 -f $USER_HOME/.ssh/id_rsa -q -N ""
     cat $USER_HOME/.ssh/id_rsa.pub >> $USER_HOME/.ssh/authorized_keys
     chmod 700 $USER_HOME/.ssh
     chmod 600 $USER_HOME/.ssh/authorized_keys
     chown -R $HESTIA_USER:$HESTIA_USER $USER_HOME/.ssh
     success_message "SSH key authentication configured. Private key is located at $USER_HOME/.ssh/id_rsa."
+}
+
+function generate_sftp_config {
+    echo "Generating SFTP configuration for VS Code..."
+    SFTP_CONFIG_FILE="/root/sftp-config-vscode.json"
+    cat > $SFTP_CONFIG_FILE <<EOL
+{
+    "name": "SFTP Connection",
+    "host": "$(curl -s ifconfig.me)",
+    "protocol": "sftp",
+    "port": 22,
+    "username": "$HESTIA_USER",
+    "privateKeyPath": "/home/$HESTIA_USER/.ssh/id_rsa",
+    "remotePath": "/home/$HESTIA_USER/",
+    "uploadOnSave": true
+}
+EOL
+    success_message "SFTP configuration for VS Code has been generated at $SFTP_CONFIG_FILE."
+}
+
+function setup_reverse_proxy {
+    echo "Setting up reverse proxy and SSL certificates..."
+    for SUBDOMAIN in "${REVERSE_DOMAINS[@]}"; do
+        if ! certbot --nginx --redirect -d $SUBDOMAIN --non-interactive --agree-tos -m $EMAIL; then
+            error_message "Failed to issue certificate for $SUBDOMAIN. Check Certbot logs."
+        else
+            success_message "Certificate for $SUBDOMAIN successfully issued."
+        fi
+    done
+    nginx -t && systemctl reload nginx || error_message "Failed to reload Nginx. Check configuration."
+}
+
+function check_services {
+    echo "Checking critical services..."
+    SERVICES=("fail2ban" "nginx" "vsftpd" "hestia")
+    for SERVICE in "${SERVICES[@]}"; do
+        if systemctl is-active --quiet $SERVICE; then
+            success_message "Service $SERVICE is running."
+        else
+            error_message "Service $SERVICE is NOT running. Attempting to start..."
+            systemctl start $SERVICE
+            if systemctl is-active --quiet $SERVICE; then
+                success_message "Service $SERVICE started successfully."
+            else
+                error_message "Failed to start service $SERVICE. Please check manually."
+            fi
+        fi
+    done
+}
+
+function check_dns_records {
+    echo "Checking DNS records for subdomains..."
+    for SUBDOMAIN in "${REVERSE_DOMAINS[@]}"; do
+        EXPECTED_IP="$SERVER_IP"
+        if [[ "$SUBDOMAIN" == "proxmox.beanssi.dk" ]]; then
+            EXPECTED_IP="$PROXMOX_IP"
+        elif [[ "$SUBDOMAIN" == "adguard.beanssi.dk" ]]; then
+            EXPECTED_IP="$ADGUARD_IP"
+        fi
+
+        DNS_IP=$(nslookup $SUBDOMAIN | grep -A1 "Name:" | tail -n1 | awk '{print $2}')
+        if [ "$DNS_IP" == "$EXPECTED_IP" ]; then
+            success_message "DNS for $SUBDOMAIN is correctly configured ($DNS_IP)."
+        else
+            error_message "DNS for $SUBDOMAIN is misconfigured. Expected $EXPECTED_IP but found $DNS_IP."
+        fi
+    done
 }
 
 function fix_dns_records {
