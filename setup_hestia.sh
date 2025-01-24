@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Script Version
-SCRIPT_VERSION="1.0.6 (Updated: $(date))"
+SCRIPT_VERSION="1.0.7 (Updated: $(date))"
 echo "Welcome to Hestia Setup Script - Version $SCRIPT_VERSION"
 
 # Variables
@@ -249,7 +249,3 @@ function full_setup {
 
 # Display menu
 display_menu
-
-
-# Final message
-echo "Setup script completed with the selected option."
