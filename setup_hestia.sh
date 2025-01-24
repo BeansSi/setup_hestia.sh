@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # Variables
-HESTIA_USER="beans"
-HESTIA_PASSWORD="Denver1234"
+HESTIA_USER="beanssi"
+HESTIA_PASSWORD="minmis123"
 EMAIL="beanssiii@gmail.com"
 DOMAIN="beanssi.dk"
 CLOUDFLARE_API_TOKEN="Y45MQapJ7oZ1j9pFf_HpoB7k-218-vZqSJEMKtD3"
