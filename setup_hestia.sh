@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Script Version
-SCRIPT_VERSION="1.1.7 (Updated: $(date))"
+SCRIPT_VERSION="1.1.8 (Updated: $(date))"
 
 echo "Welcome to Hestia Setup Script - Version $SCRIPT_VERSION"
 
@@ -45,6 +45,7 @@ function error_message {
 function create_nginx_config {
     SUBDOMAIN=$1
     TARGET_IP=$2
+    PORT=${3:-80} # Default to port 80 if not specified
 
     CONFIG_FILE="/etc/nginx/conf.d/$SUBDOMAIN.conf"
     echo "Creating nginx configuration for $SUBDOMAIN..."
@@ -55,12 +56,15 @@ server {
     server_name $SUBDOMAIN;
 
     location / {
-        proxy_pass http://$TARGET_IP;
+        proxy_pass http://$TARGET_IP:$PORT;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
     }
+
+    error_log /var/log/nginx/$SUBDOMAIN-error.log;
+    access_log /var/log/nginx/$SUBDOMAIN-access.log;
 }
 EOL
 
@@ -74,10 +78,10 @@ EOL
 
 function setup_reverse_proxy {
     echo "Setting up reverse proxy configurations..."
-    create_nginx_config "proxmox.beanssi.dk" "$PROXMOX_IP"
-    create_nginx_config "hestia.beanssi.dk" "$SERVER_IP"
+    create_nginx_config "proxmox.beanssi.dk" "$PROXMOX_IP" 8006
+    create_nginx_config "hestia.beanssi.dk" "$SERVER_IP" 8083
     create_nginx_config "beanssi.dk" "$SERVER_IP"
-    create_nginx_config "adguard.beanssi.dk" "$ADGUARD_IP"
+    create_nginx_config "adguard.beanssi.dk" "$ADGUARD_IP" 3000
 }
 
 function display_menu {
@@ -254,6 +258,58 @@ function check_dns_records {
         else
             error_message "DNS for $SUBDOMAIN is misconfigured. Expected $EXPECTED_IP but found $DNS_IP."
             update_dns_record "$SUBDOMAIN" "$EXPECTED_IP"
+        fi
+    done
+}
+
+function update_dns_record {
+    SUBDOMAIN=$1
+    EXPECTED_IP=$2
+
+    echo "Updating DNS record for $SUBDOMAIN to $EXPECTED_IP..."
+    RECORD_ID=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records?type=A&name=$SUBDOMAIN" \
+        -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+        -H "Content-Type: application/json" | jq -r '.result[0].id')
+
+    if [ "$RECORD_ID" == "null" ] || [ -z "$RECORD_ID" ]; then
+        echo "No DNS record found for $SUBDOMAIN. Creating a new record..."
+        curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records" \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data '{"type":"A","name":"'$SUBDOMAIN'","content":"'$EXPECTED_IP'","ttl":120,"proxied":true}' && \
+            success_message "DNS record created for $SUBDOMAIN pointing to $EXPECTED_IP."
+    else
+        echo "Updating existing DNS record for $SUBDOMAIN..."
+        curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records/$RECORD_ID" \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data '{"type":"A","name":"'$SUBDOMAIN'","content":"'$EXPECTED_IP'","ttl":120,"proxied":true}' && \
+            success_message "DNS record for $SUBDOMAIN updated to $EXPECTED_IP."
+    fi
+}
+
+function setup_dns {
+    echo "Setting up DNS records for all subdomains..."
+    for SUBDOMAIN in "${REVERSE_DOMAINS[@]}"; do
+        EXPECTED_IP="$SERVER_IP"
+        if [[ "$SUBDOMAIN" == "proxmox.beanssi.dk" ]]; then
+            EXPECTED_IP="$PROXMOX_IP"
+        elif [[ "$SUBDOMAIN" == "adguard.beanssi.dk" ]]; then
+            EXPECTED_IP="$ADGUARD_IP"
+        fi
+
+        update_dns_record "$SUBDOMAIN" "$EXPECTED_IP"
+    done
+}
+
+function setup_certificates {
+    echo "Setting up SSL certificates for all subdomains..."
+    for SUBDOMAIN in "${REVERSE_DOMAINS[@]}"; do
+        echo "Issuing SSL certificate for $SUBDOMAIN..."
+        if certbot --nginx --redirect -d "$SUBDOMAIN" --non-interactive --agree-tos -m "$EMAIL"; then
+            success_message "SSL certificate issued successfully for $SUBDOMAIN."
+        else
+            error_message "Failed to issue SSL certificate for $SUBDOMAIN. Check Certbot logs."
         fi
     done
 }
