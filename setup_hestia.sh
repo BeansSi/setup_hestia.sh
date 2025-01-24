@@ -12,6 +12,8 @@ SERVER_IP="62.66.145.234"
 
 # Log Setup Details
 LOGFILE=/var/log/setup_hestia.log
+ERROR_LOG="/var/log/setup_hestia_errors.log"
+> $ERROR_LOG # Clear the error log at the start of the script
 exec > >(tee -a $LOGFILE) 2>&1
 
 # Add Hestia to PATH
@@ -56,6 +58,10 @@ function display_menu {
             display_menu
             ;;
     esac
+}
+
+function log_error {
+    echo "$1" >> $ERROR_LOG
 }
 
 function backup_configurations {
@@ -139,55 +145,13 @@ function configure_certbot_plugin {
 function setup_reverse_proxy {
     echo "Setting up reverse proxy and SSL certificates..."
     for SUBDOMAIN in "${REVERSE_DOMAINS[@]}"; do
-        if [ "$SUBDOMAIN" == "proxmox.beanssi.dk" ]; then
-            PROXY_PASS="https://192.168.50.50:8006"
-        elif [ "$SUBDOMAIN" == "hestia.beanssi.dk" ]; then
-            PROXY_PASS="https://192.168.50.51:8083"
-        elif [ "$SUBDOMAIN" == "adguard.beanssi.dk" ]; then
-            PROXY_PASS="http://192.168.50.52"
-        elif [ "$SUBDOMAIN" == "beanssi.dk" ]; then
-            cat > "/etc/nginx/sites-available/$SUBDOMAIN" <<EOL
-server {
-    listen 80;
-    server_name $SUBDOMAIN;
-
-    location / {
-        root /var/www/html;
-        index index.html;
-    }
-}
-EOL
-            ln -sf "/etc/nginx/sites-available/$SUBDOMAIN" "/etc/nginx/sites-enabled/"
-            continue
+        if ! certbot --nginx --redirect -d $SUBDOMAIN --non-interactive --agree-tos -m $EMAIL; then
+            log_error "Error: Certificate for $SUBDOMAIN was not issued. Check Certbot logs for details."
         else
-            PROXY_PASS="https://192.168.50.51"
+            echo "Certificate for $SUBDOMAIN successfully issued."
         fi
-
-        cat > "/etc/nginx/sites-available/$SUBDOMAIN" <<EOL
-server {
-    listen 80;
-    listen 443 ssl;
-    server_name $SUBDOMAIN;
-
-    ssl_certificate /etc/letsencrypt/live/$SUBDOMAIN/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/$SUBDOMAIN/privkey.pem;
-
-    location / {
-        proxy_pass $PROXY_PASS;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-    }
-}
-EOL
-        ln -sf "/etc/nginx/sites-available/$SUBDOMAIN" "/etc/nginx/sites-enabled/"
-        certbot --nginx --redirect -d $SUBDOMAIN --non-interactive --agree-tos -m $EMAIL || {
-            echo "Error: Certificate for $SUBDOMAIN was not issued. Check Certbot logs for details.";
-            continue;
-        }
     done
-    nginx -t && systemctl reload nginx
+    nginx -t && systemctl reload nginx || log_error "Error: Failed to reload Nginx. Check configuration."
 }
 
 function add_domains_to_hestia {
@@ -219,12 +183,14 @@ function check_services {
         if systemctl is-active --quiet $SERVICE; then
             echo "Service $SERVICE is running."
         else
-            echo "Service $SERVICE is NOT running. Attempting to start..."
+            ERROR_MSG="Service $SERVICE is NOT running. Attempting to start..."
+            echo "$ERROR_MSG"
+            log_error "$ERROR_MSG"
             systemctl start $SERVICE
             if systemctl is-active --quiet $SERVICE; then
                 echo "Service $SERVICE started successfully."
             else
-                echo "Failed to start service $SERVICE. Please check manually."
+                log_error "Failed to start service $SERVICE. Please check manually."
             fi
         fi
     done
@@ -237,7 +203,9 @@ function check_dns_records {
         if [ "$DNS_IP" == "$SERVER_IP" ]; then
             echo "DNS for $SUBDOMAIN is correctly configured ($DNS_IP)."
         else
-            echo "Warning: DNS for $SUBDOMAIN is misconfigured. Expected $SERVER_IP but found $DNS_IP."
+            WARNING_MSG="Warning: DNS for $SUBDOMAIN is misconfigured. Expected $SERVER_IP but found $DNS_IP."
+            echo "$WARNING_MSG"
+            log_error "$WARNING_MSG"
         fi
     done
 }
@@ -255,7 +223,13 @@ function full_setup {
     check_services
     check_dns_records
 
-    echo "Full setup completed."
+    # Display errors if any
+    if [ -s $ERROR_LOG ]; then
+        echo -e "\nErrors and warnings detected during setup:"
+        cat $ERROR_LOG
+    else
+        echo -e "\nSetup completed successfully with no errors."
+    fi
 }
 
 # Display menu
