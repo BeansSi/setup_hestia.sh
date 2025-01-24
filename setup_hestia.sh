@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Script Version
-SCRIPT_VERSION="1.1.2 (Updated: $(date))"
+SCRIPT_VERSION="1.1.4 (Updated: $(date))"
 
 echo "Welcome to Hestia Setup Script - Version $SCRIPT_VERSION"
 
@@ -40,7 +40,7 @@ function error_message {
 function display_menu {
     echo "Select a category:"
     echo "1) Configuration Management"
-    echo "2) Service and DNS Tools"
+    echo "2) DNS and Certificate Management"
     echo "3) Exit"
     read -p "Enter your choice [1-3]: " MAIN_CHOICE
     case "$MAIN_CHOICE" in
@@ -48,7 +48,7 @@ function display_menu {
             configuration_menu
             ;;
         2)
-            service_dns_menu
+            dns_certificate_menu
             ;;
         3)
             echo "Exiting script."
@@ -67,9 +67,8 @@ function configuration_menu {
     echo "2) Install Fail2Ban"
     echo "3) Configure SSH key"
     echo "4) Full setup"
-    echo "5) Change admin user for Hestia"
-    echo "6) Return to main menu"
-    read -p "Enter your choice [1-6]: " CONFIG_CHOICE
+    echo "5) Return to main menu"
+    read -p "Enter your choice [1-5]: " CONFIG_CHOICE
     case "$CONFIG_CHOICE" in
         1)
             backup_configurations
@@ -84,9 +83,6 @@ function configuration_menu {
             full_setup
             ;;
         5)
-            change_hestia_admin
-            ;;
-        6)
             display_menu
             ;;
         *)
@@ -96,37 +92,29 @@ function configuration_menu {
     esac
 }
 
-function service_dns_menu {
-    echo "Service and DNS Tools:"
-    echo "1) Install Hestia Control Panel"
-    echo "2) Configure Hestia Domains"
-    echo "3) Check services"
-    echo "4) Check DNS records"
-    echo "5) Fix DNS records"
-    echo "6) Return to main menu"
-    read -p "Enter your choice [1-6]: " DNS_CHOICE
+function dns_certificate_menu {
+    echo "DNS and Certificate Management Options:"
+    echo "1) Setup DNS records"
+    echo "2) Setup SSL certificates"
+    echo "3) Check DNS records"
+    echo "4) Return to main menu"
+    read -p "Enter your choice [1-4]: " DNS_CHOICE
     case "$DNS_CHOICE" in
         1)
-            install_hestia
+            setup_dns
             ;;
         2)
-            configure_hestia_domains
+            setup_certificates
             ;;
         3)
-            check_services
-            ;;
-        4)
             check_dns_records
             ;;
-        5)
-            fix_dns_records
-            ;;
-        6)
+        4)
             display_menu
             ;;
         *)
             error_message "Invalid choice. Please try again."
-            service_dns_menu
+            dns_certificate_menu
             ;;
     esac
 }
@@ -150,6 +138,12 @@ function install_fail2ban {
     success_message "Fail2Ban is installed and running."
 }
 
+function configure_certbot_plugin {
+    echo "Ensuring Certbot Nginx plugin is installed..."
+    apt install certbot python3-certbot-nginx -y
+    success_message "Certbot and Nginx plugin installed."
+}
+
 function configure_ssh_key {
     echo "Configuring SSH key authentication for user $HESTIA_USER..."
     if id "$HESTIA_USER" &>/dev/null; then
@@ -171,52 +165,86 @@ function configure_ssh_key {
     success_message "SSH key authentication configured. Private key is located at $USER_HOME/.ssh/id_rsa."
 }
 
-function generate_sftp_config {
-    echo "Generating SFTP configuration for VS Code..."
-    SFTP_CONFIG_FILE="/root/sftp-config-vscode.json"
-    cat > $SFTP_CONFIG_FILE <<EOL
-{
-    "name": "SFTP Connection",
-    "host": "$(curl -s ifconfig.me)",
-    "protocol": "sftp",
-    "port": 22,
-    "username": "$HESTIA_USER",
-    "privateKeyPath": "/home/$HESTIA_USER/.ssh/id_rsa",
-    "remotePath": "/home/$HESTIA_USER/",
-    "uploadOnSave": true
-}
-EOL
-    success_message "SFTP configuration for VS Code has been generated at $SFTP_CONFIG_FILE."
+function update_dns_record {
+    SUBDOMAIN=$1
+    EXPECTED_IP=$2
+
+    echo "Checking DNS record for $SUBDOMAIN..."
+    RECORD_ID=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records?type=A&name=$SUBDOMAIN" \
+        -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+        -H "Content-Type: application/json" | jq -r '.result[0].id')
+
+    if [ "$RECORD_ID" == "null" ] || [ -z "$RECORD_ID" ]; then
+        echo "No DNS record found for $SUBDOMAIN. Creating a new record..."
+        curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records" \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data '{"type":"A","name":"'$SUBDOMAIN'","content":"'$EXPECTED_IP'","ttl":120,"proxied":true}' && \
+            success_message "DNS record created for $SUBDOMAIN pointing to $EXPECTED_IP."
+    else
+        echo "Updating existing DNS record for $SUBDOMAIN..."
+        curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records/$RECORD_ID" \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data '{"type":"A","name":"'$SUBDOMAIN'","content":"'$EXPECTED_IP'","ttl":120,"proxied":true}' && \
+            success_message "DNS record for $SUBDOMAIN updated to $EXPECTED_IP."
+    fi
 }
 
-function setup_reverse_proxy {
-    echo "Setting up reverse proxy and SSL certificates..."
+function setup_dns {
+    echo "Setting up DNS records for all subdomains..."
     for SUBDOMAIN in "${REVERSE_DOMAINS[@]}"; do
-        if ! certbot --nginx --redirect -d $SUBDOMAIN --non-interactive --agree-tos -m $EMAIL; then
-            error_message "Failed to issue certificate for $SUBDOMAIN. Check Certbot logs."
-        else
-            success_message "Certificate for $SUBDOMAIN successfully issued."
+        EXPECTED_IP="$SERVER_IP"
+        if [[ "$SUBDOMAIN" == "proxmox.beanssi.dk" ]]; then
+            EXPECTED_IP="$PROXMOX_IP"
+        elif [[ "$SUBDOMAIN" == "adguard.beanssi.dk" ]]; then
+            EXPECTED_IP="$ADGUARD_IP"
         fi
+
+        update_dns_record "$SUBDOMAIN" "$EXPECTED_IP"
     done
-    nginx -t && systemctl reload nginx || error_message "Failed to reload Nginx. Check configuration."
 }
 
-function check_services {
-    echo "Checking critical services..."
-    SERVICES=("fail2ban" "nginx" "vsftpd" "hestia")
-    for SERVICE in "${SERVICES[@]}"; do
-        if systemctl is-active --quiet $SERVICE; then
-            success_message "Service $SERVICE is running."
-        else
-            error_message "Service $SERVICE is NOT running. Attempting to start..."
-            systemctl start $SERVICE
-            if systemctl is-active --quiet $SERVICE; then
-                success_message "Service $SERVICE started successfully."
-            else
-                error_message "Failed to start service $SERVICE. Please check manually."
-            fi
-        fi
+function issue_certificate {
+    DOMAIN=$1
+    echo "Issuing SSL certificate for $DOMAIN..."
+    if certbot --nginx --redirect -d "$DOMAIN" --non-interactive --agree-tos -m "$EMAIL"; then
+        success_message "SSL certificate issued successfully for $DOMAIN."
+    else
+        error_message "Failed to issue SSL certificate for $DOMAIN. Check Certbot logs."
+    fi
+}
+
+function setup_certificates {
+    echo "Setting up SSL certificates for all subdomains..."
+    for SUBDOMAIN in "${REVERSE_DOMAINS[@]}"; do
+        issue_certificate "$SUBDOMAIN"
     done
+}
+
+function full_setup {
+    echo "Starting full setup..."
+    backup_configurations
+    install_fail2ban
+    configure_certbot_plugin
+    configure_ssh_key
+    setup_dns
+    setup_certificates
+
+    # Check DNS and retry certificates if necessary
+    check_dns_records
+    if [ -s $ERROR_LOG ]; then
+        echo "Retrying SSL certificates after DNS fixes..."
+        setup_certificates
+    fi
+
+    # Final check for errors
+    if [ -s $ERROR_LOG ]; then
+        error_message "\nErrors and warnings detected during setup:"
+        cat $ERROR_LOG
+    else
+        success_message "\nSetup completed successfully with no errors."
+    fi
 }
 
 function check_dns_records {
@@ -234,63 +262,9 @@ function check_dns_records {
             success_message "DNS for $SUBDOMAIN is correctly configured ($DNS_IP)."
         else
             error_message "DNS for $SUBDOMAIN is misconfigured. Expected $EXPECTED_IP but found $DNS_IP."
+            update_dns_record "$SUBDOMAIN" "$EXPECTED_IP"
         fi
     done
-}
-
-function fix_dns_records {
-    echo "Fixing DNS records for subdomains..."
-    for SUBDOMAIN in "${REVERSE_DOMAINS[@]}"; do
-        EXPECTED_IP="$SERVER_IP"
-        if [[ "$SUBDOMAIN" == "proxmox.beanssi.dk" ]]; then
-            EXPECTED_IP="$PROXMOX_IP"
-        elif [[ "$SUBDOMAIN" == "adguard.beanssi.dk" ]]; then
-            EXPECTED_IP="$ADGUARD_IP"
-        fi
-
-        echo "Updating DNS for $SUBDOMAIN to point to $EXPECTED_IP..."
-        RECORD_ID=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records?type=A&name=$SUBDOMAIN" \
-            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            -H "Content-Type: application/json" | jq -r '.result[0].id')
-
-        if [ "$RECORD_ID" != "null" ]; then
-            curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records/$RECORD_ID" \
-                -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-                -H "Content-Type: application/json" \
-                --data '{"type":"A","name":"'$SUBDOMAIN'","content":"'$EXPECTED_IP'","ttl":120,"proxied":true}' && \
-                success_message "DNS for $SUBDOMAIN updated to $EXPECTED_IP."
-        else
-            error_message "Failed to update DNS for $SUBDOMAIN. Record not found."
-        fi
-    done
-}
-
-function full_setup {
-    echo "Starting full setup..."
-    backup_configurations
-    install_fail2ban
-    configure_certbot_plugin
-    configure_ssh_key
-    generate_sftp_config
-    setup_reverse_proxy
-    check_services
-    check_dns_records
-
-    # Fix DNS records if necessary
-    if [ -s $ERROR_LOG ]; then
-        echo "Fixing DNS issues detected during setup..."
-        fix_dns_records
-        echo "Retrying setup after fixing DNS records..."
-        setup_reverse_proxy
-    fi
-
-    # Display errors if any
-    if [ -s $ERROR_LOG ]; then
-        error_message "\nErrors and warnings detected during setup:"
-        cat $ERROR_LOG
-    else
-        success_message "\nSetup completed successfully with no errors."
-    fi
 }
 
 # Display menu
