@@ -14,6 +14,23 @@ LOGFILE=/var/log/setup_hestia.log
 exec > >(tee -a $LOGFILE) 2>&1
 
 # Functions
+function prompt_continue {
+    read -p "Would you like to continue with the installation? [Y/N]: " CONFIRM
+    case "$CONFIRM" in
+        [yY] | [yY][eE][sS])
+            echo "Continuing with the installation..."
+            ;;
+        [nN] | [nN][oO])
+            echo "Installation aborted by user."
+            exit 0
+            ;;
+        *)
+            echo "Invalid input. Please enter Y or N."
+            prompt_continue
+            ;;
+    esac
+}
+
 function backup_configurations {
     echo "Backing up critical configurations..."
     BACKUP_DIR="/var/backups/setup_hestia"
@@ -44,6 +61,29 @@ function configure_ssh_key {
     echo "SSH key authentication configured. Private key is located at $USER_HOME/.ssh/id_rsa."
 }
 
+function read_hestia_credentials {
+    CREDENTIALS_FILE="/root/hestia_credentials.txt"
+    if [ -f "$CREDENTIALS_FILE" ]; then
+        echo "Reading Hestia credentials from $CREDENTIALS_FILE..."
+        HESTIA_USER=$(grep 'Username:' $CREDENTIALS_FILE | awk '{print $2}')
+        HESTIA_PASSWORD=$(grep 'Password:' $CREDENTIALS_FILE | awk '{print $2}')
+        echo "Credentials loaded: Username=$HESTIA_USER, Password=$HESTIA_PASSWORD"
+    else
+        echo "Error: Credentials file $CREDENTIALS_FILE not found."
+        exit 1
+    fi
+}
+
+function test_proxy {
+    echo "Testing reverse proxy for $1..."
+    HTTP_CODE=$(curl -o /dev/null -s -w "%{http_code}" https://$1)
+    if [[ "$HTTP_CODE" -eq 200 ]]; then
+        echo "Reverse proxy for $1 is working correctly."
+    else
+        echo "Error: Reverse proxy for $1 is not working. HTTP status code: $HTTP_CODE"
+    fi
+}
+
 function full_setup {
     echo "Starting full setup..."
     backup_configurations
@@ -61,7 +101,14 @@ function full_setup {
     # Install Hestia Control Panel
     echo "Installing Hestia Control Panel..."
     wget https://raw.githubusercontent.com/hestiacp/hestiacp/release/install/hst-install.sh
-    bash hst-install.sh --force --email $EMAIL --password $HESTIA_PASSWORD --hostname "hestia.$DOMAIN" --lang en
+    bash hst-install.sh --force --email $EMAIL --password $HESTIA_PASSWORD --hostname "hestia.$DOMAIN" --lang en -y --no-reboot
+
+    # Save Hestia credentials
+    HESTIA_CREDENTIALS_FILE="/root/hestia_credentials.txt"
+    echo "Hestia Control Panel Credentials" > $HESTRIA_CREDENTIALS_FILE
+    echo "Username: $HESTIA_USER" >> $HESTIA_CREDENTIALS_FILE
+    echo "Password: $HESTIA_PASSWORD" >> $HESTIA_CREDENTIALS_FILE
+    echo "Saved Hestia credentials to $HESTIA_CREDENTIALS_FILE."
 
     # Create Hestia user
     echo "Creating Hestia user..."
@@ -74,6 +121,7 @@ function full_setup {
     ufw allow 443/tcp
     ufw allow 8006/tcp
     ufw allow 21/tcp
+    ufw allow 10000:10100/tcp
     ufw enable
 
     # Configure FTP for VS Code Access
@@ -93,6 +141,8 @@ userlist_enable=YES
 userlist_file=/etc/vsftpd.userlist
 userlist_deny=NO
 EOL
+    mkdir -p /home/$HESTIA_USER/web/$DOMAIN/public_html
+    chown -R $HESTIA_USER:$HESTIA_USER /home/$HESTIA_USER/web/
     systemctl restart vsftpd
     echo "$HESTIA_USER" >> /etc/vsftpd.userlist
 
@@ -162,11 +212,20 @@ EOL
             --data '{"type":"A","name":"'$SUBDOMAIN'","content":"$(curl -s ifconfig.me)","ttl":120,"proxied":true}'
     done
 
+    # Test Reverse Proxies
+    test_proxy "proxmox.beanssi.dk"
+    test_proxy "hestia.beanssi.dk"
+    test_proxy "adguard.beanssi.dk"
+
     # Setup Automatic Renewal for Certificates
     echo "0 3 * * * certbot renew --quiet && systemctl reload nginx" | crontab -
 
-    echo "Full setup completed."
+    echo "Full setup completed. Rebooting now..."
+    reboot
 }
+
+# Prompt user for confirmation
+prompt_continue
 
 # Parse script options
 if [[ "$1" == "--backup" ]]; then
@@ -175,10 +234,12 @@ elif [[ "$1" == "--install-fail2ban" ]]; then
     install_fail2ban
 elif [[ "$1" == "--configure-ssh" ]]; then
     configure_ssh_key
+elif [[ "$1" == "--read-credentials" ]]; then
+    read_hestia_credentials
 elif [[ "$1" == "--full-setup" ]]; then
     full_setup
 else
-    echo "Usage: $0 [--backup | --install-fail2ban | --configure-ssh | --full-setup]"
+    echo "Usage: $0 [--backup | --install-fail2ban | --configure-ssh | --read-credentials | --full-setup]"
     exit 1
 fi
 
