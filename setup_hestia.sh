@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Script Version
-SCRIPT_VERSION="1.1.0 (Updated: $(date))"
+SCRIPT_VERSION="1.1.1 (Updated: $(date))"
 
 echo "Welcome to Hestia Setup Script - Version $SCRIPT_VERSION"
 
@@ -26,6 +26,16 @@ exec > >(tee -a $LOGFILE) 2>&1
 # Add Hestia to PATH
 export PATH=$PATH:/usr/local/hestia/bin
 
+# Helper functions for colored output
+function success_message {
+    echo -e "\e[32m[SUCCESS]\e[0m $1"
+}
+
+function error_message {
+    echo -e "\e[31m[ERROR]\e[0m $1"
+    echo "$1" >> $ERROR_LOG
+}
+
 # Functions
 function display_menu {
     echo "Select a category:"
@@ -45,7 +55,7 @@ function display_menu {
             exit 0
             ;;
         *)
-            echo "Invalid choice. Please try again."
+            error_message "Invalid choice. Please try again."
             display_menu
             ;;
     esac
@@ -80,7 +90,7 @@ function configuration_menu {
             display_menu
             ;;
         *)
-            echo "Invalid choice. Please try again."
+            error_message "Invalid choice. Please try again."
             configuration_menu
             ;;
     esac
@@ -115,14 +125,10 @@ function service_dns_menu {
             display_menu
             ;;
         *)
-            echo "Invalid choice. Please try again."
+            error_message "Invalid choice. Please try again."
             service_dns_menu
             ;;
     esac
-}
-
-function log_error {
-    echo "$1" >> $ERROR_LOG
 }
 
 function backup_configurations {
@@ -132,7 +138,7 @@ function backup_configurations {
     cp -r /etc/nginx $BACKUP_DIR/nginx_backup
     cp -r /etc/letsencrypt $BACKUP_DIR/letsencrypt_backup
     cp /etc/vsftpd.conf $BACKUP_DIR/vsftpd.conf.backup
-    echo "Backup completed. Files are stored in $BACKUP_DIR."
+    success_message "Backup completed. Files are stored in $BACKUP_DIR."
 }
 
 function install_fail2ban {
@@ -141,7 +147,7 @@ function install_fail2ban {
     apt install fail2ban -y
     systemctl enable fail2ban
     systemctl start fail2ban
-    echo "Fail2Ban is installed and running."
+    success_message "Fail2Ban is installed and running."
 }
 
 function configure_ssh_key {
@@ -152,7 +158,7 @@ function configure_ssh_key {
         echo "User $HESTIA_USER does not exist. Creating user..."
         useradd -m -s /bin/bash $HESTIA_USER
         echo "$HESTIA_USER:$HESTIA_PASSWORD" | chpasswd
-        echo "User $HESTIA_USER created."
+        success_message "User $HESTIA_USER created."
     fi
 
     USER_HOME="/home/$HESTIA_USER"
@@ -162,127 +168,7 @@ function configure_ssh_key {
     chmod 700 $USER_HOME/.ssh
     chmod 600 $USER_HOME/.ssh/authorized_keys
     chown -R $HESTIA_USER:$HESTIA_USER $USER_HOME/.ssh
-    echo "SSH key authentication configured. Private key is located at $USER_HOME/.ssh/id_rsa."
-}
-
-function change_hestia_admin {
-    echo "Changing Hestia admin user password..."
-    read -p "Enter new admin username: " NEW_ADMIN
-    read -s -p "Enter new admin password: " NEW_PASSWORD
-    echo
-    /usr/local/hestia/bin/v-change-user-password admin "$NEW_PASSWORD"
-    /usr/local/hestia/bin/v-change-user-username admin "$NEW_ADMIN"
-    echo "Admin user changed to '$NEW_ADMIN' with updated password."
-}
-
-function generate_sftp_config {
-    echo "Generating SFTP configuration for VS Code..."
-    SFTP_CONFIG_FILE="/root/sftp-config-vscode.json"
-    cat > $SFTP_CONFIG_FILE <<EOL
-{
-    "name": "SFTP Connection",
-    "host": "$(curl -s ifconfig.me)",
-    "protocol": "sftp",
-    "port": 22,
-    "username": "$HESTIA_USER",
-    "privateKeyPath": "/home/$HESTIA_USER/.ssh/id_rsa",
-    "remotePath": "/home/$HESTIA_USER/",
-    "uploadOnSave": true
-}
-EOL
-    echo "SFTP configuration for VS Code has been generated at $SFTP_CONFIG_FILE."
-}
-
-function install_hestia {
-    echo "Installing Hestia Control Panel..."
-    if [ -d "/usr/local/hestia" ]; then
-        echo "Hestia Control Panel is already installed. Skipping installation."
-        return
-    fi
-    apt update
-    wget https://raw.githubusercontent.com/hestiacp/hestiacp/release/install/hst-install.sh
-    bash hst-install.sh --force --email $EMAIL --password $HESTIA_PASSWORD --hostname "hestia.$DOMAIN" --lang en -y --no-reboot
-    echo "Hestia installation completed."
-}
-
-function configure_hestia_domains {
-    echo "Adding domains to Hestia Control Panel..."
-
-    # Ensure user exists in Hestia
-    if ! /usr/local/hestia/bin/v-list-user $HESTIA_USER &>/dev/null; then
-        echo "Hestia user $HESTIA_USER does not exist. Creating user..."
-        /usr/local/hestia/bin/v-add-user $HESTIA_USER $HESTIA_PASSWORD $EMAIL
-        echo "User $HESTIA_USER created successfully."
-    fi
-
-    for SUBDOMAIN in "${REVERSE_DOMAINS[@]}"; do
-        echo "Executing: /usr/local/hestia/bin/v-add-web-domain $HESTIA_USER $SUBDOMAIN"
-        if /usr/local/hestia/bin/v-list-web-domain $HESTIA_USER $SUBDOMAIN &>/dev/null; then
-            echo "$SUBDOMAIN already exists in Hestia. Skipping."
-        else
-            /usr/local/hestia/bin/v-add-web-domain $HESTIA_USER $SUBDOMAIN
-            /usr/local/hestia/bin/v-add-letsencrypt-domain $HESTIA_USER $SUBDOMAIN
-            echo "$SUBDOMAIN has been added to Hestia with SSL."
-        fi
-    done
-}
-
-function configure_certbot_plugin {
-    echo "Ensuring Certbot Nginx plugin is installed..."
-    apt install certbot python3-certbot-nginx -y
-}
-
-function setup_reverse_proxy {
-    echo "Setting up reverse proxy and SSL certificates..."
-    for SUBDOMAIN in "${REVERSE_DOMAINS[@]}"; do
-        if ! certbot --nginx --redirect -d $SUBDOMAIN --non-interactive --agree-tos -m $EMAIL; then
-            log_error "Error: Certificate for $SUBDOMAIN was not issued. Check Certbot logs for details."
-        else
-            echo "Certificate for $SUBDOMAIN successfully issued."
-        fi
-    done
-    nginx -t && systemctl reload nginx || log_error "Error: Failed to reload Nginx. Check configuration."
-}
-
-function check_services {
-    echo "Checking critical services..."
-    SERVICES=("fail2ban" "nginx" "vsftpd" "hestia")
-    for SERVICE in "${SERVICES[@]}"; do
-        if systemctl is-active --quiet $SERVICE; then
-            echo "Service $SERVICE is running."
-        else
-            ERROR_MSG="Service $SERVICE is NOT running. Attempting to start..."
-            echo "$ERROR_MSG"
-            log_error "$ERROR_MSG"
-            systemctl start $SERVICE
-            if systemctl is-active --quiet $SERVICE; then
-                echo "Service $SERVICE started successfully."
-            else
-                log_error "Failed to start service $SERVICE. Please check manually."
-            fi
-        fi
-    done
-}
-
-function check_dns_records {
-    echo "Checking DNS records for subdomains..."
-    for SUBDOMAIN in "${REVERSE_DOMAINS[@]}"; do
-        EXPECTED_IP="$SERVER_IP"
-        if [[ "$SUBDOMAIN" == "proxmox.beanssi.dk" ]]; then
-            EXPECTED_IP="$PROXMOX_IP"
-        elif [[ "$SUBDOMAIN" == "adguard.beanssi.dk" ]]; then
-            EXPECTED_IP="$ADGUARD_IP"
-        fi
-
-        DNS_IP=$(nslookup $SUBDOMAIN | grep -A1 "Name:" | tail -n1 | awk '{print $2}')
-        if [ "$DNS_IP" == "$EXPECTED_IP" ]; then
-            echo "DNS for $SUBDOMAIN is correctly configured ($DNS_IP)."
-        else
-            WARNING_MSG="Warning: DNS for $SUBDOMAIN is misconfigured. Expected $EXPECTED_IP but found $DNS_IP."
-            echo "$WARNING_MSG"
-            log_error "$WARNING_MSG"
-        fi
-    done
+    success_message "SSH key authentication configured. Private key is located at $USER_HOME/.ssh/id_rsa."
 }
 
 function fix_dns_records {
@@ -296,11 +182,19 @@ function fix_dns_records {
         fi
 
         echo "Updating DNS for $SUBDOMAIN to point to $EXPECTED_IP..."
-        curl -X PATCH "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records" \
+        RECORD_ID=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records?type=A&name=$SUBDOMAIN" \
             -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            -H "Content-Type: application/json" \
-            --data '{"type":"A","name":"'$SUBDOMAIN'","content":"'$EXPECTED_IP'","ttl":120,"proxied":true}'
-        echo "DNS for $SUBDOMAIN updated to $EXPECTED_IP."
+            -H "Content-Type: application/json" | jq -r '.result[0].id')
+
+        if [ "$RECORD_ID" != "null" ]; then
+            curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records/$RECORD_ID" \
+                -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+                -H "Content-Type: application/json" \
+                --data '{"type":"A","name":"'$SUBDOMAIN'","content":"'$EXPECTED_IP'","ttl":120,"proxied":true}' && \
+                success_message "DNS for $SUBDOMAIN updated to $EXPECTED_IP."
+        else
+            error_message "Failed to update DNS for $SUBDOMAIN. Record not found."
+        fi
     done
 }
 
@@ -325,10 +219,10 @@ function full_setup {
 
     # Display errors if any
     if [ -s $ERROR_LOG ]; then
-        echo -e "\nErrors and warnings detected during setup:"
+        error_message "\nErrors and warnings detected during setup:"
         cat $ERROR_LOG
     else
-        echo -e "\nSetup completed successfully with no errors."
+        success_message "\nSetup completed successfully with no errors."
     fi
 }
 
