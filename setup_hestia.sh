@@ -14,19 +14,34 @@ LOGFILE=/var/log/setup_hestia.log
 exec > >(tee -a $LOGFILE) 2>&1
 
 # Functions
-function prompt_continue {
-    read -p "Would you like to continue with the installation? [Y/N]: " CONFIRM
-    case "$CONFIRM" in
-        [yY] | [yY][eE][sS])
-            echo "Continuing with the installation..."
+function display_menu {
+    echo "Select an action to perform:"
+    echo "1) Backup configurations"
+    echo "2) Install Fail2Ban"
+    echo "3) Configure SSH key"
+    echo "4) Full setup"
+    echo "5) Exit"
+    read -p "Enter your choice [1-5]: " CHOICE
+    case "$CHOICE" in
+        1)
+            backup_configurations
             ;;
-        [nN] | [nN][oO])
-            echo "Installation aborted by user."
+        2)
+            install_fail2ban
+            ;;
+        3)
+            configure_ssh_key
+            ;;
+        4)
+            full_setup
+            ;;
+        5)
+            echo "Exiting script."
             exit 0
             ;;
         *)
-            echo "Invalid input. Please enter Y or N."
-            prompt_continue
+            echo "Invalid choice. Please try again."
+            display_menu
             ;;
     esac
 }
@@ -51,102 +66,44 @@ function install_fail2ban {
 
 function configure_ssh_key {
     echo "Configuring SSH key authentication for user $HESTIA_USER..."
-    USER_HOME="/home/$HESTIA_USER"
-    mkdir -p $USER_HOME/.ssh
-    ssh-keygen -t rsa -b 4096 -f $USER_HOME/.ssh/id_rsa -q -N ""
-    cat $USER_HOME/.ssh/id_rsa.pub >> $USER_HOME/.ssh/authorized_keys
-    chmod 700 $USER_HOME/.ssh
-    chmod 600 $USER_HOME/.ssh/authorized_keys
-    chown -R $HESTIA_USER:$HESTIA_USER $USER_HOME/.ssh
-    echo "SSH key authentication configured. Private key is located at $USER_HOME/.ssh/id_rsa."
-}
-
-function read_hestia_credentials {
-    CREDENTIALS_FILE="/root/hestia_credentials.txt"
-    if [ -f "$CREDENTIALS_FILE" ]; then
-        echo "Reading Hestia credentials from $CREDENTIALS_FILE..."
-        HESTIA_USER=$(grep 'Username:' $CREDENTIALS_FILE | awk '{print $2}')
-        HESTIA_PASSWORD=$(grep 'Password:' $CREDENTIALS_FILE | awk '{print $2}')
-        echo "Credentials loaded: Username=$HESTIA_USER, Password=$HESTIA_PASSWORD"
+    if id "$HESTIA_USER" &>/dev/null; then
+        USER_HOME="/home/$HESTIA_USER"
+        mkdir -p $USER_HOME/.ssh
+        ssh-keygen -t rsa -b 4096 -f $USER_HOME/.ssh/id_rsa -q -N ""
+        cat $USER_HOME/.ssh/id_rsa.pub >> $USER_HOME/.ssh/authorized_keys
+        chmod 700 $USER_HOME/.ssh
+        chmod 600 $USER_HOME/.ssh/authorized_keys
+        chown -R $HESTIA_USER:$HESTIA_USER $USER_HOME/.ssh
+        echo "SSH key authentication configured. Private key is located at $USER_HOME/.ssh/id_rsa."
     else
-        echo "Error: Credentials file $CREDENTIALS_FILE not found."
-        exit 1
+        echo "Error: User $HESTIA_USER does not exist. Skipping SSH key configuration."
     fi
 }
 
-function test_proxy {
-    echo "Testing reverse proxy for $1..."
-    HTTP_CODE=$(curl -o /dev/null -s -w "%{http_code}" https://$1)
-    if [[ "$HTTP_CODE" -eq 200 ]]; then
-        echo "Reverse proxy for $1 is working correctly."
+function check_hestia_installation {
+    if [ -d "/usr/local/hestia" ]; then
+        echo "Hestia Control Panel is already installed. Skipping installation."
+        return 1
     else
-        echo "Error: Reverse proxy for $1 is not working. HTTP status code: $HTTP_CODE"
+        return 0
     fi
 }
 
-function full_setup {
-    echo "Starting full setup..."
-    backup_configurations
-    install_fail2ban
-    configure_ssh_key
+function install_hestia {
+    if check_hestia_installation; then
+        echo "Installing Hestia Control Panel..."
+        wget https://raw.githubusercontent.com/hestiacp/hestiacp/release/install/hst-install.sh
+        bash hst-install.sh --force --email $EMAIL --password $HESTIA_PASSWORD --hostname "hestia.$DOMAIN" --lang en -y --no-reboot
+        echo "Hestia installation completed."
+    fi
+}
 
-    # Update server
-    echo "Updating server..."
-    apt update && apt upgrade -y
+function configure_certbot_plugin {
+    echo "Ensuring Certbot Nginx plugin is installed..."
+    apt install python3-certbot-nginx -y
+}
 
-    # Install necessary packages
-    echo "Installing required packages..."
-    apt install -y curl wget ufw nginx certbot vsftpd
-
-    # Install Hestia Control Panel
-    echo "Installing Hestia Control Panel..."
-    wget https://raw.githubusercontent.com/hestiacp/hestiacp/release/install/hst-install.sh
-    bash hst-install.sh --force --email $EMAIL --password $HESTIA_PASSWORD --hostname "hestia.$DOMAIN" --lang en -y --no-reboot
-
-    # Save Hestia credentials
-    HESTIA_CREDENTIALS_FILE="/root/hestia_credentials.txt"
-    echo "Hestia Control Panel Credentials" > $HESTRIA_CREDENTIALS_FILE
-    echo "Username: $HESTIA_USER" >> $HESTIA_CREDENTIALS_FILE
-    echo "Password: $HESTIA_PASSWORD" >> $HESTIA_CREDENTIALS_FILE
-    echo "Saved Hestia credentials to $HESTIA_CREDENTIALS_FILE."
-
-    # Create Hestia user
-    echo "Creating Hestia user..."
-    v-add-user $HESTIA_USER $HESTIA_PASSWORD $EMAIL
-
-    # Setup Firewall Rules
-    echo "Configuring firewall rules..."
-    ufw allow 22/tcp
-    ufw allow 80/tcp
-    ufw allow 443/tcp
-    ufw allow 8006/tcp
-    ufw allow 21/tcp
-    ufw allow 10000:10100/tcp
-    ufw enable
-
-    # Configure FTP for VS Code Access
-    echo "Configuring FTP server..."
-    cat > /etc/vsftpd.conf <<EOL
-listen=YES
-local_enable=YES
-write_enable=YES
-chroot_local_user=YES
-allow_writeable_chroot=YES
-pasv_enable=YES
-pasv_min_port=10000
-pasv_max_port=10100
-user_sub_token=\$USER
-local_root=/home/\$USER/web/$DOMAIN/public_html
-userlist_enable=YES
-userlist_file=/etc/vsftpd.userlist
-userlist_deny=NO
-EOL
-    mkdir -p /home/$HESTIA_USER/web/$DOMAIN/public_html
-    chown -R $HESTIA_USER:$HESTIA_USER /home/$HESTIA_USER/web/
-    systemctl restart vsftpd
-    echo "$HESTIA_USER" >> /etc/vsftpd.userlist
-
-    # Configure Reverse Proxy
+function setup_reverse_proxy {
     echo "Setting up reverse proxy and SSL certificates..."
     for SUBDOMAIN in "${REVERSE_DOMAINS[@]}"; do
         if [ "$SUBDOMAIN" == "proxmox.beanssi.dk" ]; then
@@ -167,7 +124,7 @@ server {
     }
 }
 EOL
-            ln -s "/etc/nginx/sites-available/$SUBDOMAIN" "/etc/nginx/sites-enabled/"
+            ln -sf "/etc/nginx/sites-available/$SUBDOMAIN" "/etc/nginx/sites-enabled/"
             continue
         else
             PROXY_PASS="https://192.168.50.51"
@@ -187,61 +144,29 @@ server {
     }
 }
 EOL
-        ln -s "/etc/nginx/sites-available/$SUBDOMAIN" "/etc/nginx/sites-enabled/"
-        certbot --nginx -d $SUBDOMAIN --non-interactive --agree-tos -m $EMAIL
-
-        # Validate issued certificate
-        CERT_PATH="/etc/letsencrypt/live/$SUBDOMAIN/fullchain.pem"
-        if [ -f "$CERT_PATH" ]; then
-            echo "Certificate for $SUBDOMAIN is successfully issued and available at $CERT_PATH"
-        else
-            echo "Error: Certificate for $SUBDOMAIN was not issued. Check Certbot logs for details."
-            exit 1
-        fi
+        ln -sf "/etc/nginx/sites-available/$SUBDOMAIN" "/etc/nginx/sites-enabled/"
+        certbot --nginx -d $SUBDOMAIN --non-interactive --agree-tos -m $EMAIL || {
+            echo "Error: Certificate for $SUBDOMAIN was not issued. Check Certbot logs for details.";
+            continue;
+        }
     done
-
-    # Reload Nginx
     nginx -t && systemctl reload nginx
-
-    # Configure Cloudflare DNS Records
-    echo "Configuring DNS records with Cloudflare..."
-    for SUBDOMAIN in "${REVERSE_DOMAINS[@]}"; do
-        curl -X POST "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records" \
-            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            -H "Content-Type: application/json" \
-            --data '{"type":"A","name":"'$SUBDOMAIN'","content":"$(curl -s ifconfig.me)","ttl":120,"proxied":true}'
-    done
-
-    # Test Reverse Proxies
-    test_proxy "proxmox.beanssi.dk"
-    test_proxy "hestia.beanssi.dk"
-    test_proxy "adguard.beanssi.dk"
-
-    # Setup Automatic Renewal for Certificates
-    echo "0 3 * * * certbot renew --quiet && systemctl reload nginx" | crontab -
-
-    echo "Full setup completed. Rebooting now..."
-    reboot
 }
 
-# Prompt user for confirmation
-prompt_continue
-
-# Parse script options
-if [[ "$1" == "--backup" ]]; then
+function full_setup {
+    echo "Starting full setup..."
     backup_configurations
-elif [[ "$1" == "--install-fail2ban" ]]; then
     install_fail2ban
-elif [[ "$1" == "--configure-ssh" ]]; then
+    configure_certbot_plugin
     configure_ssh_key
-elif [[ "$1" == "--read-credentials" ]]; then
-    read_hestia_credentials
-elif [[ "$1" == "--full-setup" ]]; then
-    full_setup
-else
-    echo "Usage: $0 [--backup | --install-fail2ban | --configure-ssh | --read-credentials | --full-setup]"
-    exit 1
-fi
+    install_hestia
+    setup_reverse_proxy
+
+    echo "Full setup completed."
+}
+
+# Display menu
+display_menu
 
 # Final message
 echo "Setup script completed with the selected option."
