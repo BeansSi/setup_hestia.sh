@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Script Version
-SCRIPT_VERSION="1.0.7 (Updated: $(date))"
+SCRIPT_VERSION="1.0.8 (Updated: $(date))"
 echo "Welcome to Hestia Setup Script - Version $SCRIPT_VERSION"
 
 # Variables
@@ -32,10 +32,12 @@ function display_menu {
     echo "2) Install Fail2Ban"
     echo "3) Configure SSH key"
     echo "4) Full setup"
-    echo "5) Check services"
-    echo "6) Check DNS records"
-    echo "7) Exit"
-    read -p "Enter your choice [1-7]: " CHOICE
+    echo "5) Install Hestia Control Panel"
+    echo "6) Configure Hestia Domains"
+    echo "7) Check services"
+    echo "8) Check DNS records"
+    echo "9) Exit"
+    read -p "Enter your choice [1-9]: " CHOICE
     case "$CHOICE" in
         1)
             backup_configurations
@@ -50,12 +52,18 @@ function display_menu {
             full_setup
             ;;
         5)
-            check_services
+            install_hestia
             ;;
         6)
-            check_dns_records
+            configure_hestia_domains
             ;;
         7)
+            check_services
+            ;;
+        8)
+            check_dns_records
+            ;;
+        9)
             echo "Exiting script."
             exit 0
             ;;
@@ -126,43 +134,19 @@ EOL
     echo "SFTP configuration for VS Code has been generated at $SFTP_CONFIG_FILE."
 }
 
-function check_hestia_installation {
+function install_hestia {
     if [ -d "/usr/local/hestia" ]; then
         echo "Hestia Control Panel is already installed. Skipping installation."
-        return 1
-    else
-        return 0
+        return
     fi
+    echo "Installing Hestia Control Panel..."
+    apt update
+    wget https://raw.githubusercontent.com/hestiacp/hestiacp/release/install/hst-install.sh
+    bash hst-install.sh --force --email $EMAIL --password $HESTIA_PASSWORD --hostname "hestia.$DOMAIN" --lang en -y --no-reboot
+    echo "Hestia installation completed."
 }
 
-function install_hestia {
-    if check_hestia_installation; then
-        echo "Installing Hestia Control Panel..."
-        apt update
-        wget https://raw.githubusercontent.com/hestiacp/hestiacp/release/install/hst-install.sh
-        bash hst-install.sh --force --email $EMAIL --password $HESTIA_PASSWORD --hostname "hestia.$DOMAIN" --lang en -y --no-reboot
-        echo "Hestia installation completed."
-    fi
-}
-
-function configure_certbot_plugin {
-    echo "Ensuring Certbot Nginx plugin is installed..."
-    apt install certbot python3-certbot-nginx -y
-}
-
-function setup_reverse_proxy {
-    echo "Setting up reverse proxy and SSL certificates..."
-    for SUBDOMAIN in "${REVERSE_DOMAINS[@]}"; do
-        if ! certbot --nginx --redirect -d $SUBDOMAIN --non-interactive --agree-tos -m $EMAIL; then
-            log_error "Error: Certificate for $SUBDOMAIN was not issued. Check Certbot logs for details."
-        else
-            echo "Certificate for $SUBDOMAIN successfully issued."
-        fi
-    done
-    nginx -t && systemctl reload nginx || log_error "Error: Failed to reload Nginx. Check configuration."
-}
-
-function add_domains_to_hestia {
+function configure_hestia_domains {
     echo "Adding domains to Hestia Control Panel..."
 
     # Ensure user exists in Hestia
@@ -182,6 +166,23 @@ function add_domains_to_hestia {
             echo "$SUBDOMAIN has been added to Hestia with SSL."
         fi
     done
+}
+
+function configure_certbot_plugin {
+    echo "Ensuring Certbot Nginx plugin is installed..."
+    apt install certbot python3-certbot-nginx -y
+}
+
+function setup_reverse_proxy {
+    echo "Setting up reverse proxy and SSL certificates..."
+    for SUBDOMAIN in "${REVERSE_DOMAINS[@]}"; do
+        if ! certbot --nginx --redirect -d $SUBDOMAIN --non-interactive --agree-tos -m $EMAIL; then
+            log_error "Error: Certificate for $SUBDOMAIN was not issued. Check Certbot logs for details."
+        else
+            echo "Certificate for $SUBDOMAIN successfully issued."
+        fi
+    done
+    nginx -t && systemctl reload nginx || log_error "Error: Failed to reload Nginx. Check configuration."
 }
 
 function check_services {
@@ -232,8 +233,6 @@ function full_setup {
     configure_certbot_plugin
     configure_ssh_key
     generate_sftp_config
-    install_hestia
-    add_domains_to_hestia
     setup_reverse_proxy
     check_services
     check_dns_records
