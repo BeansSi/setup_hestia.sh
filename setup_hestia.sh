@@ -6,52 +6,105 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-echo "Starter opsætning for hestia.beanssi.dk..."
+echo "Starter nulstilling og opsætning af Nginx-konfigurationer..."
 
-# Fjern gamle og konflikterende konfigurationsfiler
-echo "Fjerner gamle konfigurationsfiler..."
-rm -f /etc/nginx/conf.d/hestia.beanssi.dk.conf
-rm -f /etc/nginx/conf.d/domains/hestia.beanssi.dk.ssl.conf
-rm -f /etc/nginx/conf.d/letsencrypt.conf
+# Domæner
+DOMAINS=("proxmox.beanssi.dk" "hestia.beanssi.dk" "beanssi.dk")
 
-# Opret ny konfigurationsfil for hestia.beanssi.dk
-echo "Opretter ny konfigurationsfil..."
+# Slet gamle konfigurationsfiler
+echo "Sletter eksisterende Nginx-konfigurationsfiler..."
+for DOMAIN in "${DOMAINS[@]}"; do
+    rm -f /etc/nginx/conf.d/$DOMAIN.conf
+    rm -f /etc/nginx/conf.d/domains/$DOMAIN.ssl.conf
+done
+
+# Opret korrekte Nginx-konfigurationer
+echo "Opretter nye Nginx-konfigurationsfiler..."
+
+# Proxmox konfiguration
+cat <<EOL > /etc/nginx/conf.d/proxmox.beanssi.dk.conf
+server {
+    listen 80;
+    server_name proxmox.beanssi.dk;
+
+    return 301 https://\$host\$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name proxmox.beanssi.dk;
+
+    ssl_certificate /etc/letsencrypt/live/proxmox.beanssi.dk/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/proxmox.beanssi.dk/privkey.pem;
+
+    location / {
+        proxy_pass https://127.0.0.1:8006;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+}
+EOL
+
+# Hestia konfiguration
 cat <<EOL > /etc/nginx/conf.d/hestia.beanssi.dk.conf
 server {
     listen 80;
     server_name hestia.beanssi.dk;
 
-    # Let's Encrypt HTTP validation
     location /.well-known/acme-challenge/ {
         root /var/www/letsencrypt;
         allow all;
     }
 
-    # Proxy til Hestia Control Panel
     location / {
         proxy_pass https://127.0.0.1:8083;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto http;
+        proxy_set_header X-Forwarded-Proto https;
     }
 }
 EOL
 
-# Opret mappen til Let's Encrypt-validering
-echo "Sikrer at Let's Encrypt valideringsmappe findes..."
+# Beanssi konfiguration
+cat <<EOL > /etc/nginx/conf.d/beanssi.dk.conf
+server {
+    listen 80;
+    server_name beanssi.dk www.beanssi.dk;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/letsencrypt;
+        allow all;
+    }
+
+    location / {
+        root /home/beans/web/beanssi.dk/public_html;
+        index index.html index.htm;
+    }
+}
+EOL
+
+# Opret valideringsmappe
+echo "Opretter mappe til Let's Encrypt valideringsfiler..."
 mkdir -p /var/www/letsencrypt/.well-known/acme-challenge/
 
-# Opret testfil til validering
-echo "Opretter testfil..."
-echo "Test" > /var/www/letsencrypt/.well-known/acme-challenge/testfile
+# Opret testfiler
+echo "Opretter testfiler..."
+echo "Test for Proxmox" > /var/www/letsencrypt/.well-known/acme-challenge/test_proxmox
+echo "Test for Hestia" > /var/www/letsencrypt/.well-known/acme-challenge/test_hestia
+echo "Test for Beanssi" > /var/www/letsencrypt/.well-known/acme-challenge/test_beanssi
 
-# Test og genindlæs Nginx-konfiguration
+# Test og genindlæs Nginx
 echo "Tester og genindlæser Nginx..."
 nginx -t && systemctl reload nginx
 
 # Slutbesked
-echo "Opsætningen er fuldført! Test filen ved at tilgå:"
-echo "http://hestia.beanssi.dk/.well-known/acme-challenge/testfile"
+echo "Nginx-konfigurationer er nulstillet og opsat korrekt!"
+echo "Test dine domæner ved at tilgå:"
+echo "  http://proxmox.beanssi.dk/.well-known/acme-challenge/test_proxmox"
+echo "  http://hestia.beanssi.dk/.well-known/acme-challenge/test_hestia"
+echo "  http://beanssi.dk/.well-known/acme-challenge/test_beanssi"
 
 exit 0
