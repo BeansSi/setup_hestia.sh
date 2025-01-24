@@ -14,6 +14,9 @@ SERVER_IP="62.66.145.234"
 LOGFILE=/var/log/setup_hestia.log
 exec > >(tee -a $LOGFILE) 2>&1
 
+# Add Hestia to PATH
+export PATH=$PATH:/usr/local/hestia/bin
+
 # Functions
 function display_menu {
     echo "Select an action to perform:"
@@ -190,6 +193,7 @@ EOL
 function add_domains_to_hestia {
     echo "Adding domains to Hestia Control Panel..."
     for SUBDOMAIN in "${REVERSE_DOMAINS[@]}"; do
+        echo "Executing: /usr/local/hestia/bin/v-add-web-domain $HESTIA_USER $SUBDOMAIN"
         if /usr/local/hestia/bin/v-list-web-domain $HESTIA_USER $SUBDOMAIN &>/dev/null; then
             echo "$SUBDOMAIN already exists in Hestia. Skipping."
         else
