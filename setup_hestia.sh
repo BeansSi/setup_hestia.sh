@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Script Version
-SCRIPT_VERSION="1.0.2 (Updated: $(date))"
+SCRIPT_VERSION="1.0.3 (Updated: $(date))"
 echo "Welcome to Hestia Setup Script - Version $SCRIPT_VERSION"
 
 # Variables
@@ -205,11 +205,18 @@ function check_services {
 function check_dns_records {
     echo "Checking DNS records for subdomains..."
     for SUBDOMAIN in "${REVERSE_DOMAINS[@]}"; do
+        EXPECTED_IP="$SERVER_IP"
+        if [[ "$SUBDOMAIN" == "proxmox.beanssi.dk" ]]; then
+            EXPECTED_IP="$PROXMOX_IP"
+        elif [[ "$SUBDOMAIN" == "adguard.beanssi.dk" ]]; then
+            EXPECTED_IP="$ADGUARD_IP"
+        fi
+
         DNS_IP=$(nslookup $SUBDOMAIN | grep -A1 "Name:" | tail -n1 | awk '{print $2}')
-        if [ "$DNS_IP" == "$SERVER_IP" ]; then
+        if [ "$DNS_IP" == "$EXPECTED_IP" ]; then
             echo "DNS for $SUBDOMAIN is correctly configured ($DNS_IP)."
         else
-            WARNING_MSG="Warning: DNS for $SUBDOMAIN is misconfigured. Expected $SERVER_IP but found $DNS_IP."
+            WARNING_MSG="Warning: DNS for $SUBDOMAIN is misconfigured. Expected $EXPECTED_IP but found $DNS_IP."
             echo "$WARNING_MSG"
             log_error "$WARNING_MSG"
         fi
