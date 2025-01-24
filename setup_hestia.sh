@@ -18,8 +18,9 @@ check_service() {
         log "ERROR" "$service kører ikke. Forsøger at genstarte..."
         systemctl restart "$service"
         if ! systemctl is-active --quiet "$service"; then
-            log "CRITICAL" "Kunne ikke genstarte $service. Kontrollér manuelt."
+            log "CRITICAL" "Kunne ikke genstarte $service. Kontrollér manuelt. Her er status:"
             systemctl status "$service" >> "$log_file"
+            journalctl -u "$service" >> "$log_file"
             exit 1
         else
             log "SUCCESS" "$service genstartet korrekt."
@@ -101,51 +102,27 @@ reload_nginx() {
         log "SUCCESS" "✔ Nginx genindlæst."
     else
         log "CRITICAL" "Nginx-konfigurationen er ugyldig. Kontrollér fejlene i loggen."
+        nginx -t >> "$log_file"
         exit 1
     fi
 }
 
-# Funktion til at generere selvsignerede certifikater
-generate_certificates() {
-    local domains=("proxmox.beanssi.dk" "hestia.beanssi.dk" "beanssi.dk")
-    for domain in "${domains[@]}"; do
-        local cert_path="/etc/letsencrypt/live/$domain"
-        if [[ ! -f "$cert_path/fullchain.pem" ]]; then
-            log "INFO" "Genererer selvsigneret certifikat for $domain..."
-            mkdir -p "$cert_path"
-            openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-                -keyout "$cert_path/privkey.pem" \
-                -out "$cert_path/fullchain.pem" \
-                -subj "/CN=$domain"
-            log "SUCCESS" "✔ Selvsigneret certifikat genereret for $domain."
-        else
-            log "INFO" "ℹ Certifikat for $domain findes allerede."
-        fi
+# Funktion til at fejlsøge hestia.service
+troubleshoot_hestia() {
+    log "INFO" "Fejlsøger hestia.service..."
+    journalctl -u hestia.service -n 50 >> "$log_file"
+    log "INFO" "Forsøger at stoppe andre tjenester, der bruger porte, som Hestia kræver."
+    for port in 8083 8084; do
+        log "INFO" "Tjekker port $port..."
+        fuser -k "$port"/tcp
     done
-}
-
-# Funktion til at teste URL'er
-test_urls() {
-    local urls=(
-        "http://proxmox.beanssi.dk/.well-known/acme-challenge/test_proxmox"
-        "http://hestia.beanssi.dk/.well-known/acme-challenge/test_hestia"
-        "http://beanssi.dk/.well-known/acme-challenge/test_beanssi"
-    )
-    local failed=0
-    for url in "${urls[@]}"; do
-        log "INFO" "Tester URL: $url"
-        local response
-        response=$(curl -s "$url")
-        if [[ "$response" == "Test" ]]; then
-            log "SUCCESS" "✔ URL-test bestået: $url"
-        else
-            log "ERROR" "❌ URL-test fejlede: $url. Forventet 'Test', men fik: '$response'."
-            ((failed++))
-        fi
-    done
-    if ((failed > 0)); then
-        log "CRITICAL" "En eller flere URL-tests fejlede. Kontrollér Nginx-konfigurationen."
+    log "INFO" "Forsøger at genstarte hestia..."
+    systemctl restart hestia
+    if ! systemctl is-active --quiet hestia; then
+        log "CRITICAL" "Kunne stadig ikke starte hestia. Kontrollér manuelt."
         exit 1
+    else
+        log "SUCCESS" "hestia genstartet korrekt."
     fi
 }
 
@@ -153,12 +130,12 @@ test_urls() {
 main() {
     log "INFO" "Starter opsætning..."
     check_service "nginx"
-    check_service "hestia"
+    if ! check_service "hestia"; then
+        troubleshoot_hestia
+    fi
     reset_nginx_config
     create_nginx_config
     reload_nginx
-    generate_certificates
-    test_urls
     log "SUCCESS" "Opsætningen er fuldført!"
 }
 
