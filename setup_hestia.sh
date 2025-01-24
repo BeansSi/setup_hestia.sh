@@ -1,4 +1,3 @@
-
 #!/bin/bash
 
 log_file="/var/log/setup_hestia.log"
