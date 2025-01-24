@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Script Version
-SCRIPT_VERSION="1.0.5 (Updated: $(date))"
+SCRIPT_VERSION="1.0.6 (Updated: $(date))"
 echo "Welcome to Hestia Setup Script - Version $SCRIPT_VERSION"
 
 # Variables
@@ -70,16 +70,6 @@ function log_error {
     echo "$1" >> $ERROR_LOG
 }
 
-function preinstall_dependencies {
-    echo "Checking and installing necessary dependencies..."
-    apt update && apt install -y wget curl software-properties-common apt-transport-https gnupg2 lsb-release
-    if [ $? -ne 0 ]; then
-        log_error "Error: Failed to install base dependencies."
-        exit 1
-    fi
-    dpkg --configure -a
-}
-
 function backup_configurations {
     echo "Backing up critical configurations..."
     BACKUP_DIR="/var/backups/setup_hestia"
@@ -92,6 +82,7 @@ function backup_configurations {
 
 function install_fail2ban {
     echo "Installing and configuring Fail2Ban..."
+    apt update
     apt install fail2ban -y
     systemctl enable fail2ban
     systemctl start fail2ban
@@ -147,19 +138,16 @@ function check_hestia_installation {
 function install_hestia {
     if check_hestia_installation; then
         echo "Installing Hestia Control Panel..."
+        apt update
         wget https://raw.githubusercontent.com/hestiacp/hestiacp/release/install/hst-install.sh
         bash hst-install.sh --force --email $EMAIL --password $HESTIA_PASSWORD --hostname "hestia.$DOMAIN" --lang en -y --no-reboot
-        if [ $? -ne 0 ]; then
-            log_error "Error: Hestia installation failed. Check logs for details."
-            exit 1
-        fi
         echo "Hestia installation completed."
     fi
 }
 
 function configure_certbot_plugin {
     echo "Ensuring Certbot Nginx plugin is installed..."
-    apt install python3-certbot-nginx -y
+    apt install certbot python3-certbot-nginx -y
 }
 
 function setup_reverse_proxy {
@@ -239,7 +227,6 @@ function check_dns_records {
 
 function full_setup {
     echo "Starting full setup..."
-    preinstall_dependencies
     backup_configurations
     install_fail2ban
     configure_certbot_plugin
@@ -262,6 +249,7 @@ function full_setup {
 
 # Display menu
 display_menu
+
 
 # Final message
 echo "Setup script completed with the selected option."
