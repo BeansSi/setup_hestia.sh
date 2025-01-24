@@ -6,19 +6,72 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
+# Funktionsdefinitioner
+function delete_file() {
+    if [ -f "$1" ]; then
+        rm -f "$1"
+        if [ $? -eq 0 ]; then
+            echo "✔ Fil slettet: $1"
+        else
+            echo "❌ Kunne ikke slette fil: $1"
+        fi
+    else
+        echo "ℹ Fil findes ikke: $1"
+    fi
+}
+
+function delete_directory() {
+    if [ -d "$1" ]; then
+        rm -rf "$1"
+        if [ $? -eq 0 ]; then
+            echo "✔ Mappe slettet: $1"
+        else
+            echo "❌ Kunne ikke slette mappe: $1"
+        fi
+    else
+        echo "ℹ Mappe findes ikke: $1"
+    fi
+}
+
+function create_directory() {
+    if [ ! -d "$1" ]; then
+        mkdir -p "$1"
+        if [ $? -eq 0 ]; then
+            echo "✔ Mappe oprettet: $1"
+        else
+            echo "❌ Kunne ikke oprette mappe: $1"
+        fi
+    else
+        echo "ℹ Mappe findes allerede: $1"
+    fi
+}
+
+function check_nginx_config() {
+    nginx -t > /dev/null 2>&1
+    if [ $? -eq 0 ]; then
+        echo "✔ Nginx-konfigurationen er korrekt."
+        systemctl reload nginx
+        echo "✔ Nginx genindlæst."
+    else
+        echo "❌ Nginx-konfigurationen fejlede. Kontrollér logfilerne for detaljer."
+        exit 1
+    fi
+}
+
+# Start
 echo "Starter nulstilling og opsætning af Nginx-konfigurationer..."
 
 # Domæner
 DOMAINS=("proxmox.beanssi.dk" "hestia.beanssi.dk" "beanssi.dk")
 
-# Slet gamle konfigurationsfiler
+# Sletning af eksisterende filer
 echo "Sletter eksisterende Nginx-konfigurationsfiler..."
 for DOMAIN in "${DOMAINS[@]}"; do
-    rm -f /etc/nginx/conf.d/$DOMAIN.conf
-    rm -f /etc/nginx/conf.d/domains/$DOMAIN.ssl.conf
+    delete_file "/etc/nginx/conf.d/$DOMAIN.conf"
+    delete_file "/etc/nginx/conf.d/domains/$DOMAIN.ssl.conf"
 done
 
-# Opret korrekte Nginx-konfigurationer
+# Opret nye Nginx-konfigurationer
 echo "Opretter nye Nginx-konfigurationsfiler..."
 
 # Proxmox konfiguration
@@ -46,6 +99,7 @@ server {
     }
 }
 EOL
+echo "✔ Konfigurationsfil oprettet: /etc/nginx/conf.d/proxmox.beanssi.dk.conf"
 
 # Hestia konfiguration
 cat <<EOL > /etc/nginx/conf.d/hestia.beanssi.dk.conf
@@ -67,6 +121,7 @@ server {
     }
 }
 EOL
+echo "✔ Konfigurationsfil oprettet: /etc/nginx/conf.d/hestia.beanssi.dk.conf"
 
 # Beanssi konfiguration
 cat <<EOL > /etc/nginx/conf.d/beanssi.dk.conf
@@ -85,24 +140,25 @@ server {
     }
 }
 EOL
+echo "✔ Konfigurationsfil oprettet: /etc/nginx/conf.d/beanssi.dk.conf"
 
 # Opret valideringsmappe
 echo "Opretter mappe til Let's Encrypt valideringsfiler..."
-mkdir -p /var/www/letsencrypt/.well-known/acme-challenge/
+create_directory "/var/www/letsencrypt/.well-known/acme-challenge/"
 
 # Opret testfiler
 echo "Opretter testfiler..."
 echo "Test for Proxmox" > /var/www/letsencrypt/.well-known/acme-challenge/test_proxmox
 echo "Test for Hestia" > /var/www/letsencrypt/.well-known/acme-challenge/test_hestia
 echo "Test for Beanssi" > /var/www/letsencrypt/.well-known/acme-challenge/test_beanssi
+echo "✔ Testfiler oprettet."
 
 # Test og genindlæs Nginx
 echo "Tester og genindlæser Nginx..."
-nginx -t && systemctl reload nginx
+check_nginx_config
 
 # Slutbesked
-echo "Nginx-konfigurationer er nulstillet og opsat korrekt!"
-echo "Test dine domæner ved at tilgå:"
+echo "✅ Opsætningen er fuldført! Test dine domæner ved at tilgå følgende URL'er:"
 echo "  http://proxmox.beanssi.dk/.well-known/acme-challenge/test_proxmox"
 echo "  http://hestia.beanssi.dk/.well-known/acme-challenge/test_hestia"
 echo "  http://beanssi.dk/.well-known/acme-challenge/test_beanssi"
