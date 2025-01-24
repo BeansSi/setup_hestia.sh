@@ -20,19 +20,6 @@ function delete_file() {
     fi
 }
 
-function delete_directory() {
-    if [ -d "$1" ]; then
-        rm -rf "$1"
-        if [ $? -eq 0 ]; then
-            echo "✔ Mappe slettet: $1"
-        else
-            echo "❌ Kunne ikke slette mappe: $1"
-        fi
-    else
-        echo "ℹ Mappe findes ikke: $1"
-    fi
-}
-
 function create_directory() {
     if [ ! -d "$1" ]; then
         mkdir -p "$1"
@@ -43,6 +30,27 @@ function create_directory() {
         fi
     else
         echo "ℹ Mappe findes allerede: $1"
+    fi
+}
+
+function generate_self_signed_cert() {
+    DOMAIN=$1
+    CERT_DIR="/etc/letsencrypt/live/$DOMAIN"
+
+    if [ ! -f "$CERT_DIR/fullchain.pem" ] || [ ! -f "$CERT_DIR/privkey.pem" ]; then
+        echo "Genererer selvsigneret certifikat for $DOMAIN..."
+        mkdir -p "$CERT_DIR"
+        openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+            -keyout "$CERT_DIR/privkey.pem" \
+            -out "$CERT_DIR/fullchain.pem" \
+            -subj "/CN=$DOMAIN"
+        if [ $? -eq 0 ]; then
+            echo "✔ Selvsigneret certifikat genereret for $DOMAIN."
+        else
+            echo "❌ Kunne ikke generere selvsigneret certifikat for $DOMAIN."
+        fi
+    else
+        echo "ℹ Certifikat for $DOMAIN findes allerede."
     fi
 }
 
@@ -146,12 +154,10 @@ echo "✔ Konfigurationsfil oprettet: /etc/nginx/conf.d/beanssi.dk.conf"
 echo "Opretter mappe til Let's Encrypt valideringsfiler..."
 create_directory "/var/www/letsencrypt/.well-known/acme-challenge/"
 
-# Opret testfiler
-echo "Opretter testfiler..."
-echo "Test for Proxmox" > /var/www/letsencrypt/.well-known/acme-challenge/test_proxmox
-echo "Test for Hestia" > /var/www/letsencrypt/.well-known/acme-challenge/test_hestia
-echo "Test for Beanssi" > /var/www/letsencrypt/.well-known/acme-challenge/test_beanssi
-echo "✔ Testfiler oprettet."
+# Generer selvsignerede certifikater for alle domæner
+for DOMAIN in "${DOMAINS[@]}"; do
+    generate_self_signed_cert "$DOMAIN"
+done
 
 # Test og genindlæs Nginx
 echo "Tester og genindlæser Nginx..."
