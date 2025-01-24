@@ -1,7 +1,8 @@
 #!/bin/bash
 
 # Script Version
-SCRIPT_VERSION="1.0.9 (Updated: $(date))"
+SCRIPT_VERSION="1.1.0 (Updated: $(date))"
+
 echo "Welcome to Hestia Setup Script - Version $SCRIPT_VERSION"
 
 # Variables
@@ -27,18 +28,39 @@ export PATH=$PATH:/usr/local/hestia/bin
 
 # Functions
 function display_menu {
-    echo "Select an action to perform:"
+    echo "Select a category:"
+    echo "1) Configuration Management"
+    echo "2) Service and DNS Tools"
+    echo "3) Exit"
+    read -p "Enter your choice [1-3]: " MAIN_CHOICE
+    case "$MAIN_CHOICE" in
+        1)
+            configuration_menu
+            ;;
+        2)
+            service_dns_menu
+            ;;
+        3)
+            echo "Exiting script."
+            exit 0
+            ;;
+        *)
+            echo "Invalid choice. Please try again."
+            display_menu
+            ;;
+    esac
+}
+
+function configuration_menu {
+    echo "Configuration Management Options:"
     echo "1) Backup configurations"
     echo "2) Install Fail2Ban"
     echo "3) Configure SSH key"
     echo "4) Full setup"
-    echo "5) Install Hestia Control Panel"
-    echo "6) Configure Hestia Domains"
-    echo "7) Check services"
-    echo "8) Check DNS records"
-    echo "9) Exit"
-    read -p "Enter your choice [1-9]: " CHOICE
-    case "$CHOICE" in
+    echo "5) Change admin user for Hestia"
+    echo "6) Return to main menu"
+    read -p "Enter your choice [1-6]: " CONFIG_CHOICE
+    case "$CONFIG_CHOICE" in
         1)
             backup_configurations
             ;;
@@ -52,24 +74,49 @@ function display_menu {
             full_setup
             ;;
         5)
-            install_hestia
+            change_hestia_admin
             ;;
         6)
-            configure_hestia_domains
-            ;;
-        7)
-            check_services
-            ;;
-        8)
-            check_dns_records
-            ;;
-        9)
-            echo "Exiting script."
-            exit 0
+            display_menu
             ;;
         *)
             echo "Invalid choice. Please try again."
+            configuration_menu
+            ;;
+    esac
+}
+
+function service_dns_menu {
+    echo "Service and DNS Tools:"
+    echo "1) Install Hestia Control Panel"
+    echo "2) Configure Hestia Domains"
+    echo "3) Check services"
+    echo "4) Check DNS records"
+    echo "5) Fix DNS records"
+    echo "6) Return to main menu"
+    read -p "Enter your choice [1-6]: " DNS_CHOICE
+    case "$DNS_CHOICE" in
+        1)
+            install_hestia
+            ;;
+        2)
+            configure_hestia_domains
+            ;;
+        3)
+            check_services
+            ;;
+        4)
+            check_dns_records
+            ;;
+        5)
+            fix_dns_records
+            ;;
+        6)
             display_menu
+            ;;
+        *)
+            echo "Invalid choice. Please try again."
+            service_dns_menu
             ;;
     esac
 }
@@ -99,7 +146,9 @@ function install_fail2ban {
 
 function configure_ssh_key {
     echo "Configuring SSH key authentication for user $HESTIA_USER..."
-    if ! id "$HESTIA_USER" &>/dev/null; then
+    if id "$HESTIA_USER" &>/dev/null; then
+        echo "User $HESTIA_USER already exists. Skipping user creation."
+    else
         echo "User $HESTIA_USER does not exist. Creating user..."
         useradd -m -s /bin/bash $HESTIA_USER
         echo "$HESTIA_USER:$HESTIA_PASSWORD" | chpasswd
@@ -114,6 +163,16 @@ function configure_ssh_key {
     chmod 600 $USER_HOME/.ssh/authorized_keys
     chown -R $HESTIA_USER:$HESTIA_USER $USER_HOME/.ssh
     echo "SSH key authentication configured. Private key is located at $USER_HOME/.ssh/id_rsa."
+}
+
+function change_hestia_admin {
+    echo "Changing Hestia admin user password..."
+    read -p "Enter new admin username: " NEW_ADMIN
+    read -s -p "Enter new admin password: " NEW_PASSWORD
+    echo
+    /usr/local/hestia/bin/v-change-user-password admin "$NEW_PASSWORD"
+    /usr/local/hestia/bin/v-change-user-username admin "$NEW_ADMIN"
+    echo "Admin user changed to '$NEW_ADMIN' with updated password."
 }
 
 function generate_sftp_config {
