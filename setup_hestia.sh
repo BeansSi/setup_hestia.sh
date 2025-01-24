@@ -1,12 +1,12 @@
 #!/bin/bash
 
 # Script Version
-SCRIPT_VERSION="1.1.5 (Updated: $(date))"
+SCRIPT_VERSION="1.1.6 (Updated: $(date))"
 
 echo "Welcome to Hestia Setup Script - Version $SCRIPT_VERSION"
 
 # Variables
-USE_PUBLIC_IP=true # Set to false to use local IPs
+USE_PUBLIC_IP=false # Always use local IPs in this setup
 
 HESTIA_USER="beanssi"
 HESTIA_PASSWORD="minmis123"
@@ -16,16 +16,10 @@ CLOUDFLARE_API_TOKEN="Y45MQapJ7oZ1j9pFf_HpoB7k-218-vZqSJEMKtD3"
 CLOUDFLARE_ZONE_ID="9de910e45e803b9d6012834bbc70223c"
 REVERSE_DOMAINS=("proxmox.beanssi.dk" "hestia.beanssi.dk" "beanssi.dk" "adguard.beanssi.dk")
 
-# Determine IPs based on public or local setting
-if [ "$USE_PUBLIC_IP" = true ]; then
-    SERVER_IP="62.66.145.234"
-    PROXMOX_IP="62.66.145.234"
-    ADGUARD_IP="62.66.145.234"
-else
-    SERVER_IP="192.168.50.51"
-    PROXMOX_IP="192.168.50.50"
-    ADGUARD_IP="192.168.50.52"
-fi
+# Local IPs for reverse proxy
+SERVER_IP="192.168.50.51"
+PROXMOX_IP="192.168.50.50"
+ADGUARD_IP="192.168.50.52"
 
 # Log Setup Details
 LOGFILE=/var/log/setup_hestia.log
@@ -47,12 +41,51 @@ function error_message {
 }
 
 # Functions
+function create_nginx_config {
+    SUBDOMAIN=$1
+    TARGET_IP=$2
+
+    CONFIG_FILE="/etc/nginx/conf.d/$SUBDOMAIN.conf"
+    echo "Creating nginx configuration for $SUBDOMAIN..."
+
+    cat > $CONFIG_FILE <<EOL
+server {
+    listen 80;
+    server_name $SUBDOMAIN;
+
+    location / {
+        proxy_pass http://$TARGET_IP;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+EOL
+
+    if nginx -t; then
+        success_message "Nginx configuration for $SUBDOMAIN created successfully."
+        systemctl reload nginx
+    else
+        error_message "Failed to create nginx configuration for $SUBDOMAIN."
+    fi
+}
+
+function setup_reverse_proxy {
+    echo "Setting up reverse proxy configurations..."
+    create_nginx_config "proxmox.beanssi.dk" "$PROXMOX_IP"
+    create_nginx_config "hestia.beanssi.dk" "$SERVER_IP"
+    create_nginx_config "beanssi.dk" "$SERVER_IP"
+    create_nginx_config "adguard.beanssi.dk" "$ADGUARD_IP"
+}
+
 function display_menu {
     echo "Select a category:"
     echo "1) Configuration Management"
     echo "2) DNS and Certificate Management"
-    echo "3) Exit"
-    read -p "Enter your choice [1-3]: " MAIN_CHOICE
+    echo "3) Reverse Proxy Management"
+    echo "4) Exit"
+    read -p "Enter your choice [1-4]: " MAIN_CHOICE
     case "$MAIN_CHOICE" in
         1)
             configuration_menu
@@ -61,6 +94,9 @@ function display_menu {
             dns_certificate_menu
             ;;
         3)
+            setup_reverse_proxy
+            ;;
+        4)
             echo "Exiting script."
             exit 0
             ;;
@@ -175,63 +211,6 @@ function configure_ssh_key {
     success_message "SSH key authentication configured. Private key is located at $USER_HOME/.ssh/id_rsa."
 }
 
-function update_dns_record {
-    SUBDOMAIN=$1
-    EXPECTED_IP=$2
-
-    echo "Checking DNS record for $SUBDOMAIN..."
-    RECORD_ID=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records?type=A&name=$SUBDOMAIN" \
-        -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-        -H "Content-Type: application/json" | jq -r '.result[0].id')
-
-    if [ "$RECORD_ID" == "null" ] || [ -z "$RECORD_ID" ]; then
-        echo "No DNS record found for $SUBDOMAIN. Creating a new record..."
-        curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records" \
-            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            -H "Content-Type: application/json" \
-            --data '{"type":"A","name":"'$SUBDOMAIN'","content":"'$EXPECTED_IP'","ttl":120,"proxied":true}' && \
-            success_message "DNS record created for $SUBDOMAIN pointing to $EXPECTED_IP."
-    else
-        echo "Updating existing DNS record for $SUBDOMAIN..."
-        curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records/$RECORD_ID" \
-            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            -H "Content-Type: application/json" \
-            --data '{"type":"A","name":"'$SUBDOMAIN'","content":"'$EXPECTED_IP'","ttl":120,"proxied":true}' && \
-            success_message "DNS record for $SUBDOMAIN updated to $EXPECTED_IP."
-    fi
-}
-
-function setup_dns {
-    echo "Setting up DNS records for all subdomains..."
-    for SUBDOMAIN in "${REVERSE_DOMAINS[@]}"; do
-        EXPECTED_IP="$SERVER_IP"
-        if [[ "$SUBDOMAIN" == "proxmox.beanssi.dk" ]]; then
-            EXPECTED_IP="$PROXMOX_IP"
-        elif [[ "$SUBDOMAIN" == "adguard.beanssi.dk" ]]; then
-            EXPECTED_IP="$ADGUARD_IP"
-        fi
-
-        update_dns_record "$SUBDOMAIN" "$EXPECTED_IP"
-    done
-}
-
-function issue_certificate {
-    DOMAIN=$1
-    echo "Issuing SSL certificate for $DOMAIN..."
-    if certbot --nginx --redirect -d "$DOMAIN" --non-interactive --agree-tos -m "$EMAIL"; then
-        success_message "SSL certificate issued successfully for $DOMAIN."
-    else
-        error_message "Failed to issue SSL certificate for $DOMAIN. Check Certbot logs."
-    fi
-}
-
-function setup_certificates {
-    echo "Setting up SSL certificates for all subdomains..."
-    for SUBDOMAIN in "${REVERSE_DOMAINS[@]}"; do
-        issue_certificate "$SUBDOMAIN"
-    done
-}
-
 function full_setup {
     echo "Starting full setup..."
     backup_configurations
@@ -239,6 +218,7 @@ function full_setup {
     configure_certbot_plugin
     configure_ssh_key
     setup_dns
+    setup_reverse_proxy
     setup_certificates
 
     # Check DNS and retry certificates if necessary
