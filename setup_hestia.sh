@@ -1,12 +1,16 @@
 #!/bin/bash
 
+log_file="/var/log/setup_hestia.log"
+
+# Logging funktion
 log() {
     local level="$1"
     local message="$2"
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $level: $message"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $level: $message" | tee -a "$log_file"
 }
 
-check_and_restart_service() {
+# Tjek status for en service
+check_service() {
     local service="$1"
     log "INFO" "Kontrollerer status for $service..."
     if ! systemctl is-active --quiet "$service"; then
@@ -16,6 +20,7 @@ check_and_restart_service() {
             log "SUCCESS" "$service genstartet korrekt."
         else
             log "CRITICAL" "Kunne ikke genstarte $service. Kontrollér manuelt."
+            journalctl -u "$service" | tail -n 20 >> "$log_file"
             exit 1
         fi
     else
@@ -23,115 +28,82 @@ check_and_restart_service() {
     fi
 }
 
-fix_port_conflict() {
-    local port="$1"
-    log "INFO" "Kontrollerer, om port $port allerede er i brug..."
-    if lsof -i :$port | grep LISTEN; then
-        log "ERROR" "Port $port er allerede i brug. Dræber processer..."
-        fuser -k $port/tcp
-        log "SUCCESS" "Port $port frigivet."
-    else
-        log "INFO" "Port $port er ledig."
-    fi
+# Fjern Nginx-konfigurationsfiler
+reset_nginx_config() {
+    log "INFO" "Sletter eksisterende Nginx-konfigurationsfiler..."
+    rm -f /etc/nginx/conf.d/proxmox.beanssi.dk.conf
+    rm -f /etc/nginx/conf.d/hestia.beanssi.dk.conf
+    rm -f /etc/nginx/conf.d/beanssi.dk.conf
+    log "SUCCESS" "Eksisterende Nginx-konfigurationsfiler slettet."
 }
 
-delete_and_recreate_files() {
-    log "INFO" "Sletter og genopretter nødvendige filer..."
-    # Slet eksisterende konfigurationsfiler
-    for domain in proxmox.beanssi.dk hestia.beanssi.dk beanssi.dk; do
-        conf_path="/etc/nginx/conf.d/$domain.conf"
-        if [ -f "$conf_path" ]; then
-            rm "$conf_path"
-            log "SUCCESS" "Fil slettet: $conf_path"
-        else
-            log "INFO" "Fil findes ikke: $conf_path"
-        fi
-    done
-
-    # Slet gamle certifikatfiler
-    for domain in proxmox.beanssi.dk hestia.beanssi.dk beanssi.dk; do
-        cert_path="/etc/letsencrypt/live/$domain"
-        if [ -d "$cert_path" ]; then
-            rm -rf "$cert_path"
-            log "SUCCESS" "Certifikatfiler slettet: $cert_path"
-        else
-            log "INFO" "Certifikatfiler findes ikke: $cert_path"
-        fi
-    done
-
-    # Genopret konfigurationsfiler
-    create_nginx_configs
-}
-
-create_nginx_configs() {
-    log "INFO" "Opretter nye Nginx-konfigurationsfiler..."
-    for domain in proxmox.beanssi.dk hestia.beanssi.dk beanssi.dk; do
-        cat <<EOF > /etc/nginx/conf.d/$domain.conf
+# Genskab Nginx-konfiguration
+create_nginx_config() {
+    log "INFO" "Genskaber Nginx-konfigurationsfiler..."
+    cat <<EOF > /etc/nginx/conf.d/proxmox.beanssi.dk.conf
 server {
     listen 80;
-    server_name $domain;
-
+    server_name proxmox.beanssi.dk;
     location /.well-known/acme-challenge/ {
         root /var/www/letsencrypt;
     }
+}
+EOF
 
-    location / {
-        return 301 https://\$host\$request_uri;
+    cat <<EOF > /etc/nginx/conf.d/hestia.beanssi.dk.conf
+server {
+    listen 80;
+    server_name hestia.beanssi.dk;
+    location /.well-known/acme-challenge/ {
+        root /var/www/letsencrypt;
     }
 }
 EOF
-        log "SUCCESS" "Konfigurationsfil oprettet: /etc/nginx/conf.d/$domain.conf"
-    done
+
+    cat <<EOF > /etc/nginx/conf.d/beanssi.dk.conf
+server {
+    listen 80;
+    server_name beanssi.dk;
+    location /.well-known/acme-challenge/ {
+        root /var/www/letsencrypt;
+    }
+}
+EOF
+    log "SUCCESS" "Nginx-konfigurationsfiler genskabt."
 }
 
-test_and_reload_nginx() {
-    log "INFO" "Tester og genindlæser Nginx-konfiguration..."
+# Test og genindlæs Nginx
+reload_nginx() {
+    log "INFO" "Tester og genindlæser Nginx..."
     if nginx -t; then
         systemctl reload nginx
-        log "SUCCESS" "Nginx genindlæst korrekt."
+        log "SUCCESS" "Nginx genindlæst."
     else
-        log "CRITICAL" "Fejl i Nginx-konfigurationen. Kontrollér og ret fejlene manuelt."
+        log "CRITICAL" "Nginx-konfiguration mislykkedes. Kontrollér fejl."
+        nginx -t 2>&1 | tee -a "$log_file"
         exit 1
     fi
 }
 
-run_certbot() {
-    log "INFO" "Forsøger at generere Let's Encrypt-certifikater..."
+# Generer Let's Encrypt-certifikater
+generate_certificates() {
     for domain in proxmox.beanssi.dk hestia.beanssi.dk beanssi.dk; do
-        if certbot certonly --nginx -d "$domain" --non-interactive --agree-tos --email admin@beanssi.dk; then
+        log "INFO" "Forsøger at generere certifikat for $domain..."
+        if certbot certonly --nginx -d "$domain" --non-interactive --agree-tos -m "admin@$domain"; then
             log "SUCCESS" "Certifikat genereret for $domain."
         else
-            log "ERROR" "Kunne ikke generere certifikat for $domain. Forsøger at rette fejl."
-            delete_and_recreate_files
+            log "ERROR" "Kunne ikke generere certifikat for $domain. Kontrollér manuelt."
+            certbot renew --dry-run | tee -a "$log_file"
         fi
     done
 }
 
-test_urls() {
-    log "INFO" "Tester URL'er for Let's Encrypt validering..."
-    for domain in proxmox.beanssi.dk hestia.beanssi.dk beanssi.dk; do
-        url="http://$domain/.well-known/acme-challenge/testfile"
-        response=$(curl -s -o /dev/null -w "%{http_code}" "$url")
-        if [ "$response" -eq 200 ]; then
-            log "SUCCESS" "URL fungerer korrekt: $url"
-        else
-            log "ERROR" "URL-test fejlede for $url. HTTP-kode: $response"
-            log "INFO" "Forsøger at rette fejl automatisk..."
-            run_certbot
-        fi
-    done
-}
-
-main() {
-    log "INFO" "Starter opsætning..."
-    check_and_restart_service "nginx"
-    check_and_restart_service "hestia"
-    fix_port_conflict 8080
-    fix_port_conflict 8083
-    delete_and_recreate_files
-    test_and_reload_nginx
-    test_urls
-    log "INFO" "Opsætningen er fuldført!"
-}
-
-main
+# Script eksekvering
+log "INFO" "Starter opsætning..."
+check_service "nginx"
+check_service "hestia"
+reset_nginx_config
+create_nginx_config
+reload_nginx
+generate_certificates
+log "INFO" "Opsætningen er fuldført!"
