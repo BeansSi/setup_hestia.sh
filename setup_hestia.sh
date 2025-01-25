@@ -139,8 +139,27 @@ install_or_update_hestia() {
     # Installerer Hestia Control Panel
     success_message "Installerer Hestia Control Panel..."
     wget https://raw.githubusercontent.com/hestiacp/hestiacp/release/install/hst-install.sh -O hst-install.sh
-    if bash hst-install.sh --force --yes --nginx yes --apache yes --phpfpm yes --multiphp yes --mysql yes --postgresql yes --exim no --dovecot no --clamav no --spamassassin no --iptables yes --fail2ban yes --quota no --dns yes --hostname "$HOSTNAME" --email "$ADMIN_EMAIL" --password "$ADMIN_PASSWORD"; then
-        success_message "Hestia blev installeret korrekt."
+    if bash hst-install-ubuntu.sh \
+    --apache yes \
+    --phpfpm yes \
+    --multiphp yes \
+    --mysql yes \
+    --postgresql yes \
+    --exim no \
+    --dovecot no \
+    --clamav no \
+    --spamassassin no \
+    --iptables yes \
+    --fail2ban yes \
+    --quota no \
+    --named yes \
+    --hostname "$HOSTNAME" \
+    --email "$ADMIN_EMAIL" \
+    --password "$ADMIN_PASSWORD" \
+    --interactive no \
+    --force; then
+
+    success_message "Hestia blev installeret korrekt."
     else
         error_message "Installation af Hestia mislykkedes."
     fi
