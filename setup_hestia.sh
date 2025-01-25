@@ -22,7 +22,7 @@ error_message() {
 
 # Funktion til at hente og køre det nyeste script fra GitHub
 download_and_execute_script() {
-    echo "Henter det nyeste setup_hestia.sh fra GitHub..."
+    echo "Henter den nyeste version af setup_hestia.sh fra GitHub..."
     curl -O https://raw.githubusercontent.com/BeansSi/setup_hestia.sh/main/setup_hestia.sh
 
     if [ $? -ne 0 ]; then
@@ -31,8 +31,9 @@ download_and_execute_script() {
     fi
 
     chmod +x setup_hestia.sh
-    echo "Kører setup_hestia.sh..."
-    sudo ./setup_hestia.sh
+    success_message "Script hentet og gjort eksekverbart."
+    echo "Genstarter scriptet med den opdaterede version..."
+    exec sudo ./setup_hestia.sh
 }
 
 # Funktion til at opdatere DNS-poster via Cloudflare
