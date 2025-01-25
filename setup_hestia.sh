@@ -1,3 +1,36 @@
+#!/bin/bash
+
+# Script til administration af Hestia Control Panel med Cloudflare-integration og reverse proxy
+SCRIPT_VERSION="1.0.4"  # Opdateret version
+
+# Tjekker, om scriptet køres som root
+if [ "$(id -u)" -ne 0 ]; then
+    echo -e "\e[31mDette script skal køres som root. Brug sudo.\e[0m"
+    exit 1
+fi
+
+# Brugerkonfiguration
+HOSTNAME="hestia.beanssi.dk"
+ADMIN_EMAIL="beans@beanssi.dk"
+ADMIN_PASSWORD="minmis123"
+CLOUDFLARE_EMAIL="beanssiii@gmail.com"
+CLOUDFLARE_API_TOKEN="Y45MQapJ7oZ1j9pFf_HpoB7k-218-vZqSJEMKtD3"
+CLOUDFLARE_ZONE_ID="9de910e45e803b9d6012834bbc70223c"
+SUBDOMAINS=("proxmox.beanssi.dk" "hestia.beanssi.dk" "adguard.beanssi.dk")
+LOGFILE="error.log"
+
+# Funktion til at vise succesbeskeder
+success_message() {
+    echo -e "\e[32m$1\e[0m"
+}
+
+# Funktion til at vise fejlbeskeder og logge dem
+error_message() {
+    echo -e "\e[31m$1\e[0m"
+    echo "$(date): $1" >> "$LOGFILE"
+}
+
+# Funktion til at opdatere Reverse Proxy-konfigurationen
 update_reverse_proxy() {
     echo "Opdaterer Reverse Proxy-konfiguration for subdomæner..."
 
@@ -78,3 +111,26 @@ EOF
         error_message "Fejl ved genindlæsning af Nginx. Tjek konfigurationen manuelt."
     fi
 }
+
+# Menu
+while true; do
+    clear
+    echo "Hestia Menu - Version $SCRIPT_VERSION"
+    echo "1. Tjek og opdater DNS-poster"
+    echo "2. Opdater Reverse Proxy-konfiguration"
+    echo "3. Vis fejl-loggen"
+    echo "4. Afslut"
+    echo -n "Vælg en mulighed [1-4]: "
+    read -r choice
+
+    case $choice in
+        1) check_and_update_dns ;;
+        2) update_reverse_proxy ;;
+        3) if [ -f "$LOGFILE" ]; then cat "$LOGFILE"; else echo "Ingen fejl fundet endnu."; fi ;;
+        4) success_message "Afslutter..."; exit 0 ;;
+        *) error_message "Ugyldigt valg, prøv igen."; sleep 2 ;;
+    esac
+
+    echo -e "\nTryk på Enter for at fortsætte..."
+    read -r
+done
