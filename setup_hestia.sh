@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Script til administration af Reverse Proxy, DNS & SSL
-SCRIPT_VERSION="2.3.0"
+SCRIPT_VERSION="2.3.2"
 
 # Brugerkonfiguration
 CLOUDFLARE_API_TOKEN="Y45MQapJ7oZ1j9pFf_HpoB7k-218-vZqSJEMKtD3"
@@ -20,6 +20,35 @@ success_message() {
 error_message() {
     echo -e "\e[31m$1\e[0m"
     echo "$(date): $1" >> "$LOGFILE"
+}
+
+# Funktion til at håndtere SSL-certifikatproblemer
+handle_ssl() {
+    echo "Håndterer SSL-certifikatproblemer og aktiverer Let's Encrypt..."
+    
+    for subdomain in "${SUBDOMAINS[@]}"; do
+        echo "Kontrollerer SSL for $subdomain..."
+
+        # Åbner nødvendige porte
+        echo "Sikrer at port 80 og 443 er åbne..."
+        ufw allow 80/tcp &> /dev/null && success_message "Port 80 er åben."
+        ufw allow 443/tcp &> /dev/null && success_message "Port 443 er åben."
+
+        # Aktiverer Let's Encrypt-certifikat
+        if v-add-letsencrypt-domain admin "$subdomain"; then
+            success_message "Let's Encrypt-certifikat aktiveret for $subdomain."
+        else
+            error_message "Fejl ved aktivering af Let's Encrypt for $subdomain. Tjek loggen."
+        fi
+    done
+
+    # Aktiverer Let's Encrypt for Hestia kontrolpanel
+    echo "Aktiverer Let's Encrypt for Hestia kontrolpanel..."
+    if v-add-letsencrypt-host; then
+        success_message "Let's Encrypt-certifikat aktiveret for kontrolpanelet."
+    else
+        error_message "Fejl ved aktivering af Let's Encrypt for kontrolpanelet."
+    fi
 }
 
 # Funktion til at hente og køre det nyeste script fra GitHub
@@ -55,69 +84,79 @@ download_and_execute_script() {
     fi
 }
 
-# Funktion til at tjekke DNS og opdatere om nødvendigt
-check_and_update_dns() {
-    echo "Tjekker DNS-poster i Cloudflare..."
-    for subdomain in "${SUBDOMAINS[@]}"; do
-        expected_ip="192.168.50.50"
-        if [[ "$subdomain" == "hestia.beanssi.dk" ]]; then
-            expected_ip="192.168.50.51"
-        elif [[ "$subdomain" == "adguard.beanssi.dk" ]]; then
-            expected_ip="192.168.50.52"
-        fi
+# Funktion til at opdatere Reverse Proxy-konfigurationen
+update_reverse_proxy() {
+    echo "Opdaterer Reverse Proxy-konfiguration for subdomæner..."
 
-        echo "Tjekker $subdomain..."
-        response=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records?name=$subdomain" \
-        -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-        -H "Content-Type: application/json")
+    # Sørg for, at mapperne eksisterer
+    if [ ! -d /etc/nginx/sites-available ]; then
+        mkdir -p /etc/nginx/sites-available || {
+            error_message "Kunne ikke oprette /etc/nginx/sites-available."
+            return 1
+        }
+        success_message "Mappen /etc/nginx/sites-available blev oprettet."
+    fi
 
-        current_ip=$(echo "$response" | jq -r '.result[0].content')
+    if [ ! -d /etc/nginx/sites-enabled ]; then
+        mkdir -p /etc/nginx/sites-enabled || {
+            error_message "Kunne ikke oprette /etc/nginx/sites-enabled."
+            return 1
+        }
+        success_message "Mappen /etc/nginx/sites-enabled blev oprettet."
+    fi
 
-        if [[ "$current_ip" == "$expected_ip" ]]; then
-            success_message "DNS-posten for $subdomain er korrekt ($current_ip)."
-        else
-            error_message "DNS for $subdomain er forkert (forventet: $expected_ip, fundet: $current_ip). Opdaterer DNS..."
-            record_id=$(echo "$response" | jq -r '.result[0].id')
-            if [[ "$record_id" == "null" ]]; then
-                # Opretter ny DNS-post
-                response=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records" \
-                -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-                -H "Content-Type: application/json" \
-                --data '{
-                    "type": "A",
-                    "name": "'"$subdomain"'",
-                    "content": "'"$expected_ip"'",
-                    "ttl": 3600,
-                    "proxied": false
-                }')
+    # Sørg for, at Nginx er installeret
+    if ! command -v nginx &> /dev/null; then
+        error_message "Nginx er ikke installeret. Installerer Nginx..."
+        apt update && apt install -y nginx || {
+            error_message "Fejl under installation af Nginx."
+            return 1
+        }
+        success_message "Nginx blev installeret."
+    fi
 
-                if echo "$response" | grep -q '"success":true'; then
-                    success_message "DNS for $subdomain blev oprettet korrekt."
-                else
-                    error_message "Fejl ved oprettelse af DNS for $subdomain. Response: $response"
-                fi
-            else
-                # Opdaterer eksisterende DNS-post
-                response=$(curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records/$record_id" \
-                -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-                -H "Content-Type: application/json" \
-                --data '{
-                    "type": "A",
-                    "name": "'"$subdomain"'",
-                    "content": "'"$expected_ip"'",
-                    "ttl": 3600,
-                    "proxied": false
-                }')
+    # Opretter eller opdaterer reverse proxy-konfiguration
+    cat <<EOF > /etc/nginx/sites-available/reverse_proxy.conf
+server {
+    server_name proxmox.beanssi.dk;
+    location / {
+        proxy_pass https://192.168.50.50:8006;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_ssl_verify off;
+    }
+}
 
-                if echo "$response" | grep -q '"success":true'; then
-                    success_message "DNS for $subdomain blev opdateret korrekt."
-                else
-                    error_message "Fejl ved opdatering af DNS for $subdomain. Response: $response"
-                fi
-            fi
-        fi
-    done
-    echo "DNS-tjek afsluttet."
+server {
+    server_name hestia.beanssi.dk;
+    location / {
+        proxy_pass https://192.168.50.51:8083;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    }
+}
+
+server {
+    server_name adguard.beanssi.dk;
+    location / {
+        proxy_pass http://192.168.50.52:3000;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    }
+}
+EOF
+
+    ln -sf /etc/nginx/sites-available/reverse_proxy.conf /etc/nginx/sites-enabled/reverse_proxy.conf
+
+    # Genindlæser Nginx
+    if systemctl reload nginx; then
+        success_message "Reverse Proxy-konfiguration opdateret og Nginx genindlæst."
+    else
+        error_message "Fejl ved genindlæsning af Nginx. Tjek konfigurationen manuelt."
+    fi
 }
 
 # Menu
