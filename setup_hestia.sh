@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Script til administration af Reverse Proxy, DNS & SSL
-SCRIPT_VERSION="2.5.3"
+SCRIPT_VERSION="2.6.0"
 
 # Sikrer, at Hestia er i PATH
 export PATH=$PATH:/usr/local/hestia/bin:/usr/local/hestia/sbin
@@ -52,7 +52,6 @@ check_and_upgrade_package() {
     local user="admin"
     echo "Tjekker brugerens pakke..."
 
-    # Tjek, om brugeren har nået grænsen for webdomæner
     if v-list-user "$user" | grep -q "WEB_DOMAINS.*0"; then
         echo "Opgraderer brugerens pakke for at fjerne domænebegrænsninger..."
         if ! v-change-user-package "$user" default --WEB_DOMAINS unlimited &>> "$LOGFILE"; then
@@ -66,16 +65,61 @@ check_and_upgrade_package() {
     fi
 }
 
-# Funktion til at oprette domæner i Hestia
+# Opretter en Reverse Proxy-skabelon
+create_reverse_proxy_template() {
+    echo "Opretter Reverse Proxy-skabelon..."
+    local template_path="/usr/local/hestia/data/templates/web/nginx/reverse_proxy.tpl"
+
+    cat <<EOF > "$template_path"
+server {
+    listen      80;
+    server_name %domain_idn% www.%domain_idn%;
+    return 301 https://\$host\$request_uri;
+}
+
+server {
+    listen      443 ssl;
+    server_name %domain_idn% www.%domain_idn%;
+
+    ssl_certificate      /etc/ssl/certs/%domain%.crt;
+    ssl_certificate_key  /etc/ssl/certs/%domain%.key;
+
+    location / {
+        proxy_pass http://%ip%:%port%;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    }
+}
+EOF
+
+    if [ -f "$template_path" ]; then
+        success_message "Reverse Proxy-skabelon oprettet: $template_path"
+    else
+        error_message "Kunne ikke oprette Reverse Proxy-skabelon."
+        exit 1
+    fi
+}
+
+# Opretter domæner i Hestia og anvender Reverse Proxy
 create_domains() {
     check_and_upgrade_package
+    create_reverse_proxy_template
 
     for subdomain in "${SUBDOMAINS[@]}"; do
-        echo "Forsøger at oprette domæne: $subdomain..."
+        local ip port
+        case "$subdomain" in
+            "proxmox.beanssi.dk") ip="192.168.50.50"; port="8006" ;;
+            "hestia.beanssi.dk") ip="192.168.50.51"; port="8083" ;;
+            "adguard.beanssi.dk") ip="192.168.50.52"; port="3000" ;;
+        esac
+
+        echo "Opretter domæne $subdomain med Reverse Proxy..."
         if ! v-add-web-domain admin "$subdomain" &>> "$LOGFILE"; then
             error_message "Fejl ved oprettelse af webdomænet $subdomain."
         else
-            success_message "Webdomæne $subdomain oprettet."
+            v-change-web-domain-tpl admin "$subdomain" reverse_proxy &>> "$LOGFILE"
+            success_message "Webdomæne $subdomain oprettet med Reverse Proxy."
         fi
     done
 }
@@ -102,47 +146,6 @@ handle_ssl() {
     fi
 }
 
-# Funktion til at hente og køre det nyeste script fra GitHub
-download_and_execute_script() {
-    clear_log_if_updated
-
-    local retries=50
-    local attempt=1
-
-    while ((attempt <= retries)); do
-        REMOTE_VERSION=$(curl -s "$REMOTE_SCRIPT_URL" | grep -oP 'SCRIPT_VERSION="\K[0-9]+\.[0-9]+\.[0-9]+')
-        if [ "$REMOTE_VERSION" != "$SCRIPT_VERSION" ]; then
-            echo "Opdaterer til version $REMOTE_VERSION..."
-            curl -s -O "$REMOTE_SCRIPT_URL" && chmod +x "$LOCAL_SCRIPT_NAME"
-            success_message "Script opdateret. Genstarter..."
-            exec sudo ./"$LOCAL_SCRIPT_NAME"
-        else
-            echo -ne "Version up-to-date ($SCRIPT_VERSION). Tjekker igen...\r"
-            sleep 5
-        fi
-        ((attempt++))
-    done
-
-    error_message "Ingen opdatering fundet efter $retries forsøg."
-}
-
-# Funktion til DNS-opdateringer (eksisterende funktion)
-check_and_update_dns() {
-    echo "Tjekker og opdaterer DNS-poster..."
-    for subdomain in "${SUBDOMAINS[@]}"; do
-        echo "Tjekker $subdomain..."
-        # DNS-opdateringslogik her...
-    done
-    success_message "DNS-poster opdateret."
-}
-
-# Funktion til Reverse Proxy-konfiguration (eksisterende funktion)
-update_reverse_proxy() {
-    echo "Opdaterer Reverse Proxy-konfiguration..."
-    # Reverse Proxy-konfigurationslogik her...
-    success_message "Reverse Proxy-konfiguration opdateret."
-}
-
 # Menu
 while true; do
     clear
@@ -159,7 +162,7 @@ while true; do
     case $choice in
         0) download_and_execute_script ;;
         1) check_and_update_dns ;;
-        2) update_reverse_proxy ;;
+        2) create_domains ;;
         3) handle_ssl ;;
         4) if [ -f "$LOGFILE" ]; then cat "$LOGFILE"; else echo "Ingen fejl fundet endnu."; fi ;;
         5) success_message "Afslutter..."; exit 0 ;;
