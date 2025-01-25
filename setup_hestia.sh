@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Script til administration af Reverse Proxy, DNS & SSL
-SCRIPT_VERSION="2.6.0"
+SCRIPT_VERSION="2.6.1"
 
 # Sikrer, at Hestia er i PATH
 export PATH=$PATH:/usr/local/hestia/bin:/usr/local/hestia/sbin
