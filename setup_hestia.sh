@@ -1,7 +1,16 @@
 #!/bin/bash
 
 # Script til administration af Reverse Proxy, DNS & SSL
-SCRIPT_VERSION="2.4.1"
+SCRIPT_VERSION="2.4.2"
+
+# Sikrer, at Hestia er i PATH
+export PATH=$PATH:/usr/local/hestia/bin:/usr/local/hestia/sbin
+
+# Tjekker root-tilladelser
+if [ "$EUID" -ne 0 ]; then
+    echo "Dette script skal køres som root. Brug sudo."
+    exit 1
+fi
 
 # Brugerkonfiguration
 CLOUDFLARE_API_TOKEN="Y45MQapJ7oZ1j9pFf_HpoB7k-218-vZqSJEMKtD3"
@@ -22,6 +31,21 @@ error_message() {
     echo "$(date): $1" >> "$LOGFILE"
 }
 
+# Tjekker om Hestia er installeret
+check_hestia_installed() {
+    echo "Kontrollerer, om Hestia er installeret..."
+    if [ ! -d "/usr/local/hestia" ]; then
+        error_message "Hestia er ikke installeret. Installer Hestia og prøv igen."
+        exit 1
+    fi
+
+    if ! command -v v-add-web-domain &>/dev/null; then
+        error_message "Hestia-kommandoer er ikke tilgængelige. Tjek installationen."
+        exit 1
+    fi
+    success_message "Hestia er installeret og tilgængelig."
+}
+
 # Funktion til at oprette domæner i Hestia
 create_domains() {
     echo "Opretter webdomæner i Hestia..."
@@ -36,9 +60,9 @@ create_domains() {
 
 # Funktion til at håndtere SSL-certifikatproblemer
 handle_ssl() {
-    echo "Håndterer SSL-certifikatproblemer og aktiverer Let's Encrypt..."
+    check_hestia_installed
 
-    # Opret domæner, hvis de mangler
+    echo "Håndterer SSL-certifikatproblemer og aktiverer Let's Encrypt..."
     create_domains
 
     for subdomain in "${SUBDOMAINS[@]}"; do
@@ -60,51 +84,6 @@ handle_ssl() {
     else
         error_message "Fejl ved aktivering af Let's Encrypt for kontrolpanelet. Se detaljer i loggen."
     fi
-}
-
-# Funktion til at hente og køre det nyeste script fra GitHub
-download_and_execute_script() {
-    local retries=5
-    local retry_delay=30
-    local attempt=1
-
-    echo "Tjekker version af det eksterne script på GitHub..."
-
-    while ((attempt <= retries)); do
-        echo "Forsøg $attempt af $retries..."
-
-        # Hent kun versionsnummeret fra det eksterne script
-        REMOTE_VERSION=$(curl -s "$REMOTE_SCRIPT_URL" | grep -oP 'SCRIPT_VERSION="\K[0-9]+\.[0-9]+\.[0-9]+')
-
-        if [ -z "$REMOTE_VERSION" ]; then
-            error_message "Kunne ikke hente version fra det eksterne script."
-            return 1
-        fi
-
-        echo "Lokal version: $SCRIPT_VERSION"
-        echo "Fjern version: $REMOTE_VERSION"
-
-        # Sammenlign versionerne
-        if [ "$REMOTE_VERSION" != "$SCRIPT_VERSION" ]; then
-            echo "Ny version tilgængelig. Opdaterer scriptet..."
-            curl -s -O "$REMOTE_SCRIPT_URL"
-
-            if [ $? -ne 0 ]; then
-                error_message "Fejl ved hentning af det opdaterede script."
-                return 1
-            fi
-
-            chmod +x "$(basename "$REMOTE_SCRIPT_URL")"
-            success_message "Script opdateret til version $REMOTE_VERSION. Genstarter..."
-            exec sudo ./"$(basename "$REMOTE_SCRIPT_URL")"
-        else
-            echo "Ingen opdatering fundet. Venter $retry_delay sekunder og prøver igen..."
-            sleep $retry_delay
-            ((attempt++))
-        fi
-    done
-
-    error_message "Ingen nye opdateringer fundet efter $retries forsøg."
 }
 
 # Menu
