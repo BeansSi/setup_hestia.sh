@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Script til administration af Reverse Proxy, DNS & SSL
-SCRIPT_VERSION="2.5.0"
+SCRIPT_VERSION="2.5.2"
 
 # Sikrer, at Hestia er i PATH
 export PATH=$PATH:/usr/local/hestia/bin:/usr/local/hestia/sbin
@@ -47,8 +47,27 @@ check_hestia_installed() {
     fi
 }
 
+# Tjekker og opgraderer brugerens pakke, hvis nødvendigt
+check_and_upgrade_package() {
+    local user="admin"
+    echo "Tjekker brugerens pakke..."
+
+    if v-list-user "$user" | grep -q "WEB_DOMAINS.*0"; then
+        echo "Opgraderer brugerens pakke for at fjerne domænebegrænsninger..."
+        if ! v-change-user-package "$user" default --WEB_DOMAINS unlimited &>> "$LOGFILE"; then
+            error_message "Fejl ved opgradering af brugerens pakke."
+        else
+            success_message "Brugerens pakke opgraderet. Grænsen for webdomæner er fjernet."
+        fi
+    else
+        success_message "Brugerens pakke er allerede konfigureret uden begrænsninger."
+    fi
+}
+
 # Funktion til at oprette domæner i Hestia
 create_domains() {
+    check_and_upgrade_package
+
     for subdomain in "${SUBDOMAINS[@]}"; do
         if ! v-add-web-domain admin "$subdomain" &>> "$LOGFILE"; then
             error_message "Fejl ved oprettelse af webdomænet $subdomain."
