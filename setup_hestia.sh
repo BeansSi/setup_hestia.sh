@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Script til installation og administration af Hestia Control Panel med Cloudflare-integration og reverse proxy
-SCRIPT_VERSION="1.0.1"  # Opdater denne version manuelt ved ændringer
+SCRIPT_VERSION="1.0.2"  # Opdater denne version manuelt ved ændringer
 
 # Tjekker, om scriptet køres som root
 if [ "$(id -u)" -ne 0 ]; then
@@ -55,7 +55,7 @@ check_and_update_dns() {
             record_id=$(echo "$response" | jq -r '.result[0].id')
             if [[ "$record_id" == "null" ]]; then
                 # Opretter ny DNS-post
-                curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records" \
+                response=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records" \
                 -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
                 -H "Content-Type: application/json" \
                 --data '{
@@ -63,11 +63,17 @@ check_and_update_dns() {
                     "name": "'"$subdomain"'",
                     "content": "'"$expected_ip"'",
                     "ttl": 3600,
-                    "proxied": true
-                }' && success_message "DNS for $subdomain blev oprettet." || error_message "Fejl ved oprettelse af DNS for $subdomain."
+                    "proxied": false
+                }')
+
+                if echo "$response" | grep -q '"success":true'; then
+                    success_message "DNS for $subdomain blev oprettet korrekt."
+                else
+                    error_message "Fejl ved oprettelse af DNS for $subdomain. Response: $response"
+                fi
             else
                 # Opdaterer eksisterende DNS-post
-                curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records/$record_id" \
+                response=$(curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records/$record_id" \
                 -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
                 -H "Content-Type: application/json" \
                 --data '{
@@ -75,8 +81,14 @@ check_and_update_dns() {
                     "name": "'"$subdomain"'",
                     "content": "'"$expected_ip"'",
                     "ttl": 3600,
-                    "proxied": true
-                }' && success_message "DNS for $subdomain blev opdateret." || error_message "Fejl ved opdatering af DNS for $subdomain."
+                    "proxied": false
+                }')
+
+                if echo "$response" | grep -q '"success":true'; then
+                    success_message "DNS for $subdomain blev opdateret korrekt."
+                else
+                    error_message "Fejl ved opdatering af DNS for $subdomain. Response: $response"
+                fi
             fi
         fi
     done
