@@ -4,7 +4,7 @@
 SCRIPT_VERSION="2.0.2"
 
 # Aktiverer debug mode (echo alt hvad der sker)
-set -x
+#set -x
 
 # Brugerkonfiguration
 CLOUDFLARE_API_TOKEN="Y45MQapJ7oZ1j9pFf_HpoB7k-218-vZqSJEMKtD3"
