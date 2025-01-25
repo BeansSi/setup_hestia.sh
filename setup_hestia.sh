@@ -8,6 +8,8 @@ CLOUDFLARE_API_TOKEN="Y45MQapJ7oZ1j9pFf_HpoB7k-218-vZqSJEMKtD3"
 CLOUDFLARE_ZONE_ID="9de910e45e803b9d6012834bbc70223c"
 SUBDOMAINS=("proxmox.beanssi.dk" "hestia.beanssi.dk" "adguard.beanssi.dk")
 LOGFILE="error.log"
+REMOTE_SCRIPT_URL="https://raw.githubusercontent.com/BeansSi/setup_hestia.sh/main/setup_hestia.sh"
+LOCAL_SCRIPT_NAME="$(basename "$0")"
 
 # Funktion til at vise succesbeskeder
 success_message() {
@@ -20,32 +22,36 @@ error_message() {
     echo "$(date): $1" >> "$LOGFILE"
 }
 
-# Funktion til at håndtere SSL-certifikatproblemer og aktivere Let's Encrypt
-handle_ssl() {
-    echo "Håndterer SSL-certifikatproblemer og aktiverer Let's Encrypt..."
-    
-    for subdomain in "${SUBDOMAINS[@]}"; do
-        echo "Kontrollerer SSL for $subdomain..."
+# Funktion til at hente og køre det nyeste script fra GitHub
+download_and_execute_script() {
+    echo "Tjekker version af det eksterne script på GitHub..."
 
-        # Åbner nødvendige porte
-        echo "Sikrer at port 80 og 443 er åbne..."
-        ufw allow 80/tcp &> /dev/null && success_message "Port 80 er åben."
-        ufw allow 443/tcp &> /dev/null && success_message "Port 443 er åben."
+    # Hent kun versionsnummeret fra det eksterne script
+    REMOTE_VERSION=$(curl -s "$REMOTE_SCRIPT_URL" | grep -oP 'SCRIPT_VERSION="\K[0-9]+\.[0-9]+\.[0-9]+')
 
-        # Aktiverer Let's Encrypt-certifikat
-        if v-add-letsencrypt-domain admin "$subdomain"; then
-            success_message "Let's Encrypt-certifikat aktiveret for $subdomain."
-        else
-            error_message "Fejl ved aktivering af Let's Encrypt for $subdomain. Tjek loggen."
+    if [ -z "$REMOTE_VERSION" ]; then
+        error_message "Kunne ikke hente version fra det eksterne script."
+        return 1
+    fi
+
+    echo "Lokal version: $SCRIPT_VERSION"
+    echo "Fjern version: $REMOTE_VERSION"
+
+    # Sammenlign versionerne
+    if [ "$REMOTE_VERSION" != "$SCRIPT_VERSION" ]; then
+        echo "Ny version tilgængelig. Opdaterer scriptet..."
+        curl -s -O "$REMOTE_SCRIPT_URL"
+
+        if [ $? -ne 0 ]; then
+            error_message "Fejl ved hentning af det opdaterede script."
+            return 1
         fi
-    done
 
-    # Aktiverer Let's Encrypt for Hestia kontrolpanel
-    echo "Aktiverer Let's Encrypt for Hestia kontrolpanel..."
-    if v-add-letsencrypt-host; then
-        success_message "Let's Encrypt-certifikat aktiveret for kontrolpanelet."
+        chmod +x "$(basename "$REMOTE_SCRIPT_URL")"
+        success_message "Script opdateret til version $REMOTE_VERSION. Genstarter..."
+        exec sudo ./"$(basename "$REMOTE_SCRIPT_URL")"
     else
-        error_message "Fejl ved aktivering af Let's Encrypt for kontrolpanelet."
+        success_message "Scriptet er allerede opdateret til den nyeste version ($SCRIPT_VERSION)."
     fi
 }
 
@@ -118,7 +124,7 @@ check_and_update_dns() {
 while true; do
     clear
     echo "Reverse Proxy, DNS & SSL Menu - Version $SCRIPT_VERSION"
-    echo "0. Hent og kør nyeste setup_hestia.sh fra GitHub"
+    echo "0. Tjek og opdater scriptet til nyeste version fra GitHub"
     echo "1. Tjek og opdater DNS-poster"
     echo "2. Opdater Reverse Proxy-konfiguration"
     echo "3. Håndter SSL-certifikatproblemer"
