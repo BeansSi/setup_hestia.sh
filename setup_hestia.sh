@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Script til administration af Reverse Proxy, DNS & SSL
-SCRIPT_VERSION="2.3.2"
+SCRIPT_VERSION="2.3.3"
 
 # Brugerkonfiguration
 CLOUDFLARE_API_TOKEN="Y45MQapJ7oZ1j9pFf_HpoB7k-218-vZqSJEMKtD3"
@@ -22,73 +22,55 @@ error_message() {
     echo "$(date): $1" >> "$LOGFILE"
 }
 
-# Funktion til at håndtere SSL-certifikatproblemer
-handle_ssl() {
-    echo "Håndterer SSL-certifikatproblemer og aktiverer Let's Encrypt..."
-    
-    for subdomain in "${SUBDOMAINS[@]}"; do
-        echo "Kontrollerer SSL for $subdomain..."
-
-        # Åbner nødvendige porte
-        echo "Sikrer at port 80 og 443 er åbne..."
-        ufw allow 80/tcp &> /dev/null && success_message "Port 80 er åben."
-        ufw allow 443/tcp &> /dev/null && success_message "Port 443 er åben."
-
-        # Aktiverer Let's Encrypt-certifikat
-        if v-add-letsencrypt-domain admin "$subdomain"; then
-            success_message "Let's Encrypt-certifikat aktiveret for $subdomain."
-        else
-            error_message "Fejl ved aktivering af Let's Encrypt for $subdomain. Tjek loggen."
-        fi
-    done
-
-    # Aktiverer Let's Encrypt for Hestia kontrolpanel
-    echo "Aktiverer Let's Encrypt for Hestia kontrolpanel..."
-    if v-add-letsencrypt-host; then
-        success_message "Let's Encrypt-certifikat aktiveret for kontrolpanelet."
-    else
-        error_message "Fejl ved aktivering af Let's Encrypt for kontrolpanelet."
-    fi
-}
-
 # Funktion til at hente og køre det nyeste script fra GitHub
 download_and_execute_script() {
+    local retries=5
+    local retry_delay=30
+    local attempt=1
+
     echo "Tjekker version af det eksterne script på GitHub..."
 
-    # Hent kun versionsnummeret fra det eksterne script
-    REMOTE_VERSION=$(curl -s "$REMOTE_SCRIPT_URL" | grep -oP 'SCRIPT_VERSION="\K[0-9]+\.[0-9]+\.[0-9]+')
+    while ((attempt <= retries)); do
+        echo "Forsøg $attempt af $retries..."
 
-    if [ -z "$REMOTE_VERSION" ]; then
-        error_message "Kunne ikke hente version fra det eksterne script."
-        return 1
-    fi
+        # Hent kun versionsnummeret fra det eksterne script
+        REMOTE_VERSION=$(curl -s "$REMOTE_SCRIPT_URL" | grep -oP 'SCRIPT_VERSION="\K[0-9]+\.[0-9]+\.[0-9]+')
 
-    echo "Lokal version: $SCRIPT_VERSION"
-    echo "Fjern version: $REMOTE_VERSION"
-
-    # Sammenlign versionerne
-    if [ "$REMOTE_VERSION" != "$SCRIPT_VERSION" ]; then
-        echo "Ny version tilgængelig. Opdaterer scriptet..."
-        curl -s -O "$REMOTE_SCRIPT_URL"
-
-        if [ $? -ne 0 ]; then
-            error_message "Fejl ved hentning af det opdaterede script."
+        if [ -z "$REMOTE_VERSION" ]; then
+            error_message "Kunne ikke hente version fra det eksterne script."
             return 1
         fi
 
-        chmod +x "$(basename "$REMOTE_SCRIPT_URL")"
-        success_message "Script opdateret til version $REMOTE_VERSION. Genstarter..."
-        exec sudo ./"$(basename "$REMOTE_SCRIPT_URL")"
-    else
-        success_message "Scriptet er allerede opdateret til den nyeste version ($SCRIPT_VERSION)."
-    fi
+        echo "Lokal version: $SCRIPT_VERSION"
+        echo "Fjern version: $REMOTE_VERSION"
+
+        # Sammenlign versionerne
+        if [ "$REMOTE_VERSION" != "$SCRIPT_VERSION" ]; then
+            echo "Ny version tilgængelig. Opdaterer scriptet..."
+            curl -s -O "$REMOTE_SCRIPT_URL"
+
+            if [ $? -ne 0 ]; then
+                error_message "Fejl ved hentning af det opdaterede script."
+                return 1
+            fi
+
+            chmod +x "$(basename "$REMOTE_SCRIPT_URL")"
+            success_message "Script opdateret til version $REMOTE_VERSION. Genstarter..."
+            exec sudo ./"$(basename "$REMOTE_SCRIPT_URL")"
+        else
+            echo "Ingen opdatering fundet. Venter $retry_delay sekunder og prøver igen..."
+            sleep $retry_delay
+            ((attempt++))
+        fi
+    done
+
+    error_message "Ingen nye opdateringer fundet efter $retries forsøg."
 }
 
 # Funktion til at opdatere Reverse Proxy-konfigurationen
 update_reverse_proxy() {
     echo "Opdaterer Reverse Proxy-konfiguration for subdomæner..."
 
-    # Sørg for, at mapperne eksisterer
     if [ ! -d /etc/nginx/sites-available ]; then
         mkdir -p /etc/nginx/sites-available || {
             error_message "Kunne ikke oprette /etc/nginx/sites-available."
@@ -156,6 +138,30 @@ EOF
         success_message "Reverse Proxy-konfiguration opdateret og Nginx genindlæst."
     else
         error_message "Fejl ved genindlæsning af Nginx. Tjek konfigurationen manuelt."
+    fi
+}
+
+# Funktion til at håndtere SSL-certifikatproblemer
+handle_ssl() {
+    echo "Håndterer SSL-certifikatproblemer og aktiverer Let's Encrypt..."
+    for subdomain in "${SUBDOMAINS[@]}"; do
+        echo "Kontrollerer SSL for $subdomain..."
+
+        ufw allow 80/tcp &> /dev/null && success_message "Port 80 er åben."
+        ufw allow 443/tcp &> /dev/null && success_message "Port 443 er åben."
+
+        if v-add-letsencrypt-domain admin "$subdomain"; then
+            success_message "Let's Encrypt-certifikat aktiveret for $subdomain."
+        else
+            error_message "Fejl ved aktivering af Let's Encrypt for $subdomain."
+        fi
+    done
+
+    echo "Aktiverer Let's Encrypt for Hestia kontrolpanel..."
+    if v-add-letsencrypt-host; then
+        success_message "Let's Encrypt-certifikat aktiveret for kontrolpanelet."
+    else
+        error_message "Fejl ved aktivering af Let's Encrypt for kontrolpanelet."
     fi
 }
 
