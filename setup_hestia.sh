@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Script til administration af Reverse Proxy, DNS & SSL
-SCRIPT_VERSION="2.4.2"
+SCRIPT_VERSION="2.5.0"
 
 # Sikrer, at Hestia er i PATH
 export PATH=$PATH:/usr/local/hestia/bin:/usr/local/hestia/sbin
@@ -20,6 +20,12 @@ LOGFILE="error.log"
 REMOTE_SCRIPT_URL="https://raw.githubusercontent.com/BeansSi/setup_hestia.sh/main/setup_hestia.sh"
 LOCAL_SCRIPT_NAME="$(basename "$0")"
 
+# Slet log, hvis scriptet opdateres
+if [ -f "$LOGFILE" ]; then
+    echo "Sletter gammel log..."
+    rm "$LOGFILE"
+fi
+
 # Funktion til at vise succesbeskeder
 success_message() {
     echo -e "\e[32m$1\e[0m"
@@ -33,27 +39,19 @@ error_message() {
 
 # Tjekker om Hestia er installeret
 check_hestia_installed() {
-    echo "Kontrollerer, om Hestia er installeret..."
-    if [ ! -d "/usr/local/hestia" ]; then
-        error_message "Hestia er ikke installeret. Installer Hestia og prøv igen."
-        exit 1
-    fi
-
     if ! command -v v-add-web-domain &>/dev/null; then
-        error_message "Hestia-kommandoer er ikke tilgængelige. Tjek installationen."
+        error_message "Hestia-kommandoer ikke fundet. Sørg for, at Hestia er installeret korrekt."
         exit 1
     fi
-    success_message "Hestia er installeret og tilgængelig."
 }
 
 # Funktion til at oprette domæner i Hestia
 create_domains() {
-    echo "Opretter webdomæner i Hestia..."
     for subdomain in "${SUBDOMAINS[@]}"; do
-        if v-add-web-domain admin "$subdomain" &>> "$LOGFILE"; then
-            success_message "Webdomæne $subdomain blev oprettet."
+        if ! v-add-web-domain admin "$subdomain" &>> "$LOGFILE"; then
+            error_message "Fejl ved oprettelse af webdomænet $subdomain."
         else
-            error_message "Fejl ved oprettelse af webdomænet $subdomain. Tjek loggen."
+            success_message "Webdomæne $subdomain oprettet."
         fi
     done
 }
@@ -61,29 +59,45 @@ create_domains() {
 # Funktion til at håndtere SSL-certifikatproblemer
 handle_ssl() {
     check_hestia_installed
-
-    echo "Håndterer SSL-certifikatproblemer og aktiverer Let's Encrypt..."
     create_domains
 
     for subdomain in "${SUBDOMAINS[@]}"; do
-        echo "Kontrollerer SSL for $subdomain..."
-
-        ufw allow 80/tcp &> /dev/null && success_message "Port 80 er åben."
-        ufw allow 443/tcp &> /dev/null && success_message "Port 443 er åben."
-
-        if v-add-letsencrypt-domain admin "$subdomain" &>> "$LOGFILE"; then
-            success_message "Let's Encrypt-certifikat aktiveret for $subdomain."
+        echo "Aktiverer SSL for $subdomain..."
+        if ! v-add-letsencrypt-domain admin "$subdomain" &>> "$LOGFILE"; then
+            error_message "Fejl ved aktivering af SSL for $subdomain."
         else
-            error_message "Fejl ved aktivering af Let's Encrypt for $subdomain. Se detaljer i loggen."
+            success_message "SSL-certifikat aktiveret for $subdomain."
         fi
     done
 
-    echo "Aktiverer Let's Encrypt for Hestia kontrolpanel..."
-    if v-add-letsencrypt-host &>> "$LOGFILE"; then
-        success_message "Let's Encrypt-certifikat aktiveret for kontrolpanelet."
+    echo "Aktiverer SSL for Hestia kontrolpanel..."
+    if ! v-add-letsencrypt-host &>> "$LOGFILE"; then
+        error_message "Fejl ved aktivering af SSL for kontrolpanelet."
     else
-        error_message "Fejl ved aktivering af Let's Encrypt for kontrolpanelet. Se detaljer i loggen."
+        success_message "SSL-certifikat aktiveret for kontrolpanelet."
     fi
+}
+
+# Funktion til at hente og køre det nyeste script fra GitHub
+download_and_execute_script() {
+    local retries=50
+    local attempt=1
+
+    while ((attempt <= retries)); do
+        REMOTE_VERSION=$(curl -s "$REMOTE_SCRIPT_URL" | grep -oP 'SCRIPT_VERSION="\K[0-9]+\.[0-9]+\.[0-9]+')
+        if [ "$REMOTE_VERSION" != "$SCRIPT_VERSION" ]; then
+            echo "Opdaterer til version $REMOTE_VERSION..."
+            curl -s -O "$REMOTE_SCRIPT_URL" && chmod +x "$LOCAL_SCRIPT_NAME"
+            success_message "Script opdateret. Genstarter..."
+            exec sudo ./"$LOCAL_SCRIPT_NAME"
+        else
+            echo -ne "Version up-to-date ($SCRIPT_VERSION). Tjekker igen...\r"
+            sleep 5
+        fi
+        ((attempt++))
+    done
+
+    error_message "Ingen opdatering fundet efter $retries forsøg."
 }
 
 # Menu
