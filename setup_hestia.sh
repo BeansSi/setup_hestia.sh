@@ -4,11 +4,22 @@ update_reverse_proxy() {
     # Sørg for, at mapperne eksisterer
     if [ ! -d /etc/nginx/sites-available ]; then
         mkdir -p /etc/nginx/sites-available
-        success_message "Mappen /etc/nginx/sites-available blev oprettet."
+        if [ $? -eq 0 ]; then
+            success_message "Mappen /etc/nginx/sites-available blev oprettet."
+        else
+            error_message "Kunne ikke oprette /etc/nginx/sites-available."
+            return 1
+        fi
     fi
+
     if [ ! -d /etc/nginx/sites-enabled ]; then
         mkdir -p /etc/nginx/sites-enabled
-        success_message "Mappen /etc/nginx/sites-enabled blev oprettet."
+        if [ $? -eq 0 ]; then
+            success_message "Mappen /etc/nginx/sites-enabled blev oprettet."
+        else
+            error_message "Kunne ikke oprette /etc/nginx/sites-enabled."
+            return 1
+        fi
     fi
 
     # Sørg for, at Nginx er installeret
