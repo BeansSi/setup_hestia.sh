@@ -1,6 +1,7 @@
 #!/bin/bash
 
 # Script til installation og administration af Hestia Control Panel med Cloudflare-integration og reverse proxy
+SCRIPT_VERSION="1.0.1"  # Opdater denne version manuelt ved ændringer
 
 # Tjekker, om scriptet køres som root
 if [ "$(id -u)" -ne 0 ]; then
@@ -82,50 +83,6 @@ check_and_update_dns() {
     echo "DNS-tjek afsluttet."
 }
 
-# Funktion til at oprette reverse proxy-konfiguration
-configure_reverse_proxy() {
-    echo "Konfigurerer reverse proxy for subdomæner..."
-    cat <<EOF > /etc/nginx/sites-available/reverse_proxy.conf
-server {
-    server_name proxmox.beanssi.dk;
-    location / {
-        proxy_pass https://192.168.50.50:8006;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_ssl_verify off;
-    }
-}
-
-server {
-    server_name hestia.beanssi.dk;
-    location / {
-        proxy_pass https://127.0.0.1:8083;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-    }
-}
-
-server {
-    server_name adguard.beanssi.dk;
-    location / {
-        proxy_pass http://127.0.0.1:3000;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-    }
-}
-EOF
-
-    ln -s /etc/nginx/sites-available/reverse_proxy.conf /etc/nginx/sites-enabled/reverse_proxy.conf
-    if systemctl reload nginx; then
-        success_message "Reverse proxy-konfiguration oprettet og Nginx genindlæst."
-    else
-        error_message "Fejl ved oprettelse af reverse proxy-konfiguration."
-    fi
-}
-
 # Funktion til installation eller opdatering af Hestia
 install_or_update_hestia() {
     success_message "Starter installation eller opdatering af Hestia..."
@@ -138,28 +95,27 @@ install_or_update_hestia() {
 
     # Installerer Hestia Control Panel
     success_message "Installerer Hestia Control Panel..."
-    wget https://raw.githubusercontent.com/hestiacp/hestiacp/release/install/hst-install.sh -O hst-install.sh
+    wget https://raw.githubusercontent.com/hestiacp/hestiacp/release/install/hst-install.sh -O hst-install-ubuntu.sh
     if bash hst-install-ubuntu.sh \
-    --apache yes \
-    --phpfpm yes \
-    --multiphp yes \
-    --mysql yes \
-    --postgresql yes \
-    --exim no \
-    --dovecot no \
-    --clamav no \
-    --spamassassin no \
-    --iptables yes \
-    --fail2ban yes \
-    --quota no \
-    --named yes \
-    --hostname "$HOSTNAME" \
-    --email "$ADMIN_EMAIL" \
-    --password "$ADMIN_PASSWORD" \
-    --interactive no \
-    --force; then
-
-    success_message "Hestia blev installeret korrekt."
+        --apache yes \
+        --phpfpm yes \
+        --multiphp yes \
+        --mysql yes \
+        --postgresql yes \
+        --exim no \
+        --dovecot no \
+        --clamav no \
+        --spamassassin no \
+        --iptables yes \
+        --fail2ban yes \
+        --quota no \
+        --named yes \
+        --hostname "$HOSTNAME" \
+        --email "$ADMIN_EMAIL" \
+        --password "$ADMIN_PASSWORD" \
+        --interactive no \
+        --force; then
+        success_message "Hestia blev installeret korrekt."
     else
         error_message "Installation af Hestia mislykkedes."
     fi
@@ -168,21 +124,19 @@ install_or_update_hestia() {
 # Menu
 while true; do
     clear
-    echo "Hestia Menu"
+    echo "Hestia Menu - Version $SCRIPT_VERSION"
     echo "1. Tjek og opdater DNS-poster"
     echo "2. Installer eller opdater Hestia"
-    echo "3. Konfigurer reverse proxy"
-    echo "4. Vis fejl-loggen"
-    echo "5. Afslut"
-    echo -n "Vælg en mulighed [1-5]: "
+    echo "3. Vis fejl-loggen"
+    echo "4. Afslut"
+    echo -n "Vælg en mulighed [1-4]: "
     read -r choice
 
     case $choice in
         1) check_and_update_dns ;;
         2) install_or_update_hestia ;;
-        3) configure_reverse_proxy ;;
-        4) if [ -f "$LOGFILE" ]; then cat "$LOGFILE"; else echo "Ingen fejl fundet endnu."; fi ;;
-        5) success_message "Afslutter..."; exit 0 ;;
+        3) if [ -f "$LOGFILE" ]; then cat "$LOGFILE"; else echo "Ingen fejl fundet endnu."; fi ;;
+        4) success_message "Afslutter..."; exit 0 ;;
         *) error_message "Ugyldigt valg, prøv igen."; sleep 2 ;;
     esac
 
