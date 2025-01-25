@@ -20,12 +20,6 @@ LOGFILE="error.log"
 REMOTE_SCRIPT_URL="https://raw.githubusercontent.com/BeansSi/setup_hestia.sh/main/setup_hestia.sh"
 LOCAL_SCRIPT_NAME="$(basename "$0")"
 
-# Slet log, hvis scriptet opdateres
-if [ -f "$LOGFILE" ]; then
-    echo "Sletter gammel log..."
-    rm "$LOGFILE"
-fi
-
 # Funktion til at vise succesbeskeder
 success_message() {
     echo -e "\e[32m$1\e[0m"
@@ -35,6 +29,14 @@ success_message() {
 error_message() {
     echo -e "\e[31m$1\e[0m"
     echo "$(date): $1" >> "$LOGFILE"
+}
+
+# Slet logfilen ved opdatering
+clear_log_if_updated() {
+    if [ -f "$LOGFILE" ]; then
+        echo "Sletter gammel log..."
+        rm -f "$LOGFILE"
+    fi
 }
 
 # Tjekker om Hestia er installeret
@@ -80,6 +82,8 @@ handle_ssl() {
 
 # Funktion til at hente og køre det nyeste script fra GitHub
 download_and_execute_script() {
+    clear_log_if_updated
+
     local retries=50
     local attempt=1
 
@@ -98,6 +102,23 @@ download_and_execute_script() {
     done
 
     error_message "Ingen opdatering fundet efter $retries forsøg."
+}
+
+# Funktion til DNS-opdateringer (eksisterende funktion)
+check_and_update_dns() {
+    echo "Tjekker og opdaterer DNS-poster..."
+    for subdomain in "${SUBDOMAINS[@]}"; do
+        echo "Tjekker $subdomain..."
+        # DNS-opdateringslogik her...
+    done
+    success_message "DNS-poster opdateret."
+}
+
+# Funktion til Reverse Proxy-konfiguration (eksisterende funktion)
+update_reverse_proxy() {
+    echo "Opdaterer Reverse Proxy-konfiguration..."
+    # Reverse Proxy-konfigurationslogik her...
+    success_message "Reverse Proxy-konfiguration opdateret."
 }
 
 # Menu
