@@ -1,10 +1,9 @@
 #!/bin/bash
 
 # Script til administration af Reverse Proxy og DNS-opdatering
-SCRIPT_VERSION="2.0.0"
+SCRIPT_VERSION="2.0.1"
 
 # Brugerkonfiguration
-CLOUDFLARE_EMAIL="beanssiii@gmail.com"
 CLOUDFLARE_API_TOKEN="Y45MQapJ7oZ1j9pFf_HpoB7k-218-vZqSJEMKtD3"
 CLOUDFLARE_ZONE_ID="9de910e45e803b9d6012834bbc70223c"
 SUBDOMAINS=("proxmox.beanssi.dk" "hestia.beanssi.dk" "adguard.beanssi.dk")
@@ -58,9 +57,9 @@ server {
     server_name proxmox.beanssi.dk;
     location / {
         proxy_pass https://192.168.50.50:8006;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_ssl_verify off;
     }
 }
@@ -69,9 +68,9 @@ server {
     server_name hestia.beanssi.dk;
     location / {
         proxy_pass https://192.168.50.51:8083;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
     }
 }
 
@@ -79,9 +78,9 @@ server {
     server_name adguard.beanssi.dk;
     location / {
         proxy_pass http://192.168.50.52:3000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
     }
 }
 EOF
