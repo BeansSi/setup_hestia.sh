@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Script til administration af Reverse Proxy, DNS & SSL
-SCRIPT_VERSION="2.2.0"
+SCRIPT_VERSION="2.2.1"
 
 # Brugerkonfiguration
 CLOUDFLARE_API_TOKEN="Y45MQapJ7oZ1j9pFf_HpoB7k-218-vZqSJEMKtD3"
