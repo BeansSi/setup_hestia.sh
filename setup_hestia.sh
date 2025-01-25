@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Script til installation og administration af Hestia Control Panel med Cloudflare-integration og reverse proxy
-SCRIPT_VERSION="1.0.2"  # Opdater denne version manuelt ved ændringer
+# Script til administration af Hestia Control Panel med Cloudflare-integration og reverse proxy
+SCRIPT_VERSION="1.0.3"  # Opdater denne version manuelt ved ændringer
 
 # Tjekker, om scriptet køres som root
 if [ "$(id -u)" -ne 0 ]; then
@@ -30,7 +30,51 @@ error_message() {
     echo "$(date): $1" >> "$LOGFILE"
 }
 
-# Funktion til at oprette eller opdatere DNS-poster via Cloudflare
+# Funktion til at opdatere Reverse Proxy-konfigurationen
+update_reverse_proxy() {
+    echo "Opdaterer Reverse Proxy-konfiguration for subdomæner..."
+    cat <<EOF > /etc/nginx/sites-available/reverse_proxy.conf
+server {
+    server_name proxmox.beanssi.dk;
+    location / {
+        proxy_pass https://192.168.50.50:8006;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_ssl_verify off;
+    }
+}
+
+server {
+    server_name hestia.beanssi.dk;
+    location / {
+        proxy_pass https://127.0.0.1:8083;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    }
+}
+
+server {
+    server_name adguard.beanssi.dk;
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    }
+}
+EOF
+
+    ln -sf /etc/nginx/sites-available/reverse_proxy.conf /etc/nginx/sites-enabled/reverse_proxy.conf
+    if systemctl reload nginx; then
+        success_message "Reverse Proxy-konfiguration opdateret og Nginx genindlæst."
+    else
+        error_message "Fejl ved opdatering af Reverse Proxy-konfiguration."
+    fi
+}
+
+# Funktion til at opdatere DNS-poster via Cloudflare
 check_and_update_dns() {
     echo "Tjekker DNS-poster i Cloudflare..."
     for subdomain in "${SUBDOMAINS[@]}"; do
@@ -95,50 +139,12 @@ check_and_update_dns() {
     echo "DNS-tjek afsluttet."
 }
 
-# Funktion til installation eller opdatering af Hestia
-install_or_update_hestia() {
-    success_message "Starter installation eller opdatering af Hestia..."
-    
-    # Logger kritisk information
-    echo "Hestia installation log - $(date)" >> "$LOGFILE"
-    echo "Hostname: $HOSTNAME" >> "$LOGFILE"
-    echo "Admin Email: $ADMIN_EMAIL" >> "$LOGFILE"
-    echo "Admin Password: $ADMIN_PASSWORD" >> "$LOGFILE"
-
-    # Installerer Hestia Control Panel
-    success_message "Installerer Hestia Control Panel..."
-    wget https://raw.githubusercontent.com/hestiacp/hestiacp/release/install/hst-install.sh -O hst-install-ubuntu.sh
-    if bash hst-install-ubuntu.sh \
-        --apache yes \
-        --phpfpm yes \
-        --multiphp yes \
-        --mysql yes \
-        --postgresql yes \
-        --exim no \
-        --dovecot no \
-        --clamav no \
-        --spamassassin no \
-        --iptables yes \
-        --fail2ban yes \
-        --quota no \
-        --named yes \
-        --hostname "$HOSTNAME" \
-        --email "$ADMIN_EMAIL" \
-        --password "$ADMIN_PASSWORD" \
-        --interactive no \
-        --force; then
-        success_message "Hestia blev installeret korrekt."
-    else
-        error_message "Installation af Hestia mislykkedes."
-    fi
-}
-
 # Menu
 while true; do
     clear
     echo "Hestia Menu - Version $SCRIPT_VERSION"
     echo "1. Tjek og opdater DNS-poster"
-    echo "2. Installer eller opdater Hestia"
+    echo "2. Opdater Reverse Proxy-konfiguration"
     echo "3. Vis fejl-loggen"
     echo "4. Afslut"
     echo -n "Vælg en mulighed [1-4]: "
@@ -146,7 +152,7 @@ while true; do
 
     case $choice in
         1) check_and_update_dns ;;
-        2) install_or_update_hestia ;;
+        2) update_reverse_proxy ;;
         3) if [ -f "$LOGFILE" ]; then cat "$LOGFILE"; else echo "Ingen fejl fundet endnu."; fi ;;
         4) success_message "Afslutter..."; exit 0 ;;
         *) error_message "Ugyldigt valg, prøv igen."; sleep 2 ;;
