@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Script til administration af Reverse Proxy, DNS & SSL
-SCRIPT_VERSION="2.3.3"
+SCRIPT_VERSION="2.4.0"
 
 # Brugerkonfiguration
 CLOUDFLARE_API_TOKEN="Y45MQapJ7oZ1j9pFf_HpoB7k-218-vZqSJEMKtD3"
@@ -20,6 +20,48 @@ success_message() {
 error_message() {
     echo -e "\e[31m$1\e[0m"
     echo "$(date): $1" >> "$LOGFILE"
+}
+
+# Tjekker om Hestia er installeret
+check_hestia_installed() {
+    echo "Kontrollerer, om Hestia er installeret..."
+    if ! command -v v-add-letsencrypt-domain &>/dev/null; then
+        if [ -d "/usr/local/hestia/bin" ]; then
+            success_message "Hestia er installeret, men ikke i PATH. Tilføjer stier midlertidigt..."
+            export PATH=$PATH:/usr/local/hestia/bin:/usr/local/hestia/sbin
+        else
+            error_message "Hestia ser ikke ud til at være installeret. Installer Hestia og prøv igen."
+            exit 1
+        fi
+    else
+        success_message "Hestia er installeret og tilgængelig."
+    fi
+}
+
+# Funktion til at håndtere SSL-certifikatproblemer
+handle_ssl() {
+    check_hestia_installed
+
+    echo "Håndterer SSL-certifikatproblemer og aktiverer Let's Encrypt..."
+    for subdomain in "${SUBDOMAINS[@]}"; do
+        echo "Kontrollerer SSL for $subdomain..."
+
+        ufw allow 80/tcp &> /dev/null && success_message "Port 80 er åben."
+        ufw allow 443/tcp &> /dev/null && success_message "Port 443 er åben."
+
+        if v-add-letsencrypt-domain admin "$subdomain"; then
+            success_message "Let's Encrypt-certifikat aktiveret for $subdomain."
+        else
+            error_message "Fejl ved aktivering af Let's Encrypt for $subdomain."
+        fi
+    done
+
+    echo "Aktiverer Let's Encrypt for Hestia kontrolpanel..."
+    if v-add-letsencrypt-host; then
+        success_message "Let's Encrypt-certifikat aktiveret for kontrolpanelet."
+    else
+        error_message "Fejl ved aktivering af Let's Encrypt for kontrolpanelet."
+    fi
 }
 
 # Funktion til at hente og køre det nyeste script fra GitHub
@@ -138,30 +180,6 @@ EOF
         success_message "Reverse Proxy-konfiguration opdateret og Nginx genindlæst."
     else
         error_message "Fejl ved genindlæsning af Nginx. Tjek konfigurationen manuelt."
-    fi
-}
-
-# Funktion til at håndtere SSL-certifikatproblemer
-handle_ssl() {
-    echo "Håndterer SSL-certifikatproblemer og aktiverer Let's Encrypt..."
-    for subdomain in "${SUBDOMAINS[@]}"; do
-        echo "Kontrollerer SSL for $subdomain..."
-
-        ufw allow 80/tcp &> /dev/null && success_message "Port 80 er åben."
-        ufw allow 443/tcp &> /dev/null && success_message "Port 443 er åben."
-
-        if v-add-letsencrypt-domain admin "$subdomain"; then
-            success_message "Let's Encrypt-certifikat aktiveret for $subdomain."
-        else
-            error_message "Fejl ved aktivering af Let's Encrypt for $subdomain."
-        fi
-    done
-
-    echo "Aktiverer Let's Encrypt for Hestia kontrolpanel..."
-    if v-add-letsencrypt-host; then
-        success_message "Let's Encrypt-certifikat aktiveret for kontrolpanelet."
-    else
-        error_message "Fejl ved aktivering af Let's Encrypt for kontrolpanelet."
     fi
 }
 
